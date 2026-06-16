@@ -34,15 +34,19 @@ def get_conn():
     if USE_POSTGRES:
         import urllib.parse
         url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
-        return psycopg2.connect(
-            host=url.hostname,
-            port=url.port or 5432,
-            dbname=url.path.lstrip("/"),
-            user=url.username,
-            password=url.password,
-            sslmode="require",
-            connect_timeout=15,
-        )
+        try:
+            return psycopg2.connect(
+                host=url.hostname,
+                port=url.port or 5432,
+                dbname=url.path.lstrip("/"),
+                user=url.username,
+                password=url.password,
+                sslmode="require",
+                connect_timeout=15,
+            )
+        except Exception as e:
+            st.error(f"DB host={url.hostname} port={url.port} user={url.username} | {e}")
+            raise
     return sqlite3.connect(DB_PATH)
 
 def q(sql, params=()):
