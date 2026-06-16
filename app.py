@@ -456,12 +456,12 @@ if page == "Dashboard":
 
     with col_banco:
         st.subheader("Receitas e Despesas por Banco (mes)")
-        df_banco = q("""SELECT b.name as Banco,
-            COALESCE(SUM(CASE WHEN t.type='receita' THEN t.amount ELSE 0 END),0) as Receitas,
-            COALESCE(SUM(CASE WHEN t.type='despesa' THEN t.amount ELSE 0 END),0) as Despesas
+        df_banco = q("""SELECT b.name as "Banco",
+            COALESCE(SUM(CASE WHEN t.type='receita' THEN t.amount ELSE 0 END),0) as "Receitas",
+            COALESCE(SUM(CASE WHEN t.type='despesa' THEN t.amount ELSE 0 END),0) as "Despesas"
             FROM transactions t LEFT JOIN banks b ON t.bank_id=b.id
             WHERE t.company_id=? AND t.{c}>=? AND t.{c}<=?""".format(c=campo_dash) + prof_sql + """
-            GROUP BY b.name ORDER BY Receitas DESC""",
+            GROUP BY b.name ORDER BY "Receitas" DESC""",
             (cid, first_month.strftime("%Y-%m-%d"), last_month.strftime("%Y-%m-%d")) + prof_param)
         if not df_banco.empty:
             df_banco["Resultado"] = df_banco["Receitas"] - df_banco["Despesas"]
@@ -474,15 +474,15 @@ if page == "Dashboard":
 
     with col_prof:
         st.subheader("Receitas e Despesas por Profissional (mes)")
-        df_prof = q("""SELECT COALESCE(p.name, 'Sem Profissional') as Profissional,
-            COALESCE(b.name, '-') as Banco,
-            COALESCE(SUM(CASE WHEN t.type='receita' THEN t.amount ELSE 0 END),0) as Receitas,
-            COALESCE(SUM(CASE WHEN t.type='despesa' THEN t.amount ELSE 0 END),0) as Despesas
+        df_prof = q("""SELECT COALESCE(p.name, 'Sem Profissional') as "Profissional",
+            COALESCE(b.name, '-') as "Banco",
+            COALESCE(SUM(CASE WHEN t.type='receita' THEN t.amount ELSE 0 END),0) as "Receitas",
+            COALESCE(SUM(CASE WHEN t.type='despesa' THEN t.amount ELSE 0 END),0) as "Despesas"
             FROM transactions t
             LEFT JOIN professionals p ON t.professional_id=p.id
             LEFT JOIN banks b ON t.bank_id=b.id
             WHERE t.company_id=? AND t.{c}>=? AND t.{c}<=?""".format(c=campo_dash) + prof_sql + """
-            GROUP BY p.name, b.name ORDER BY Profissional, Receitas DESC""",
+            GROUP BY p.name, b.name ORDER BY "Profissional", "Receitas" DESC""",
             (cid, first_month.strftime("%Y-%m-%d"), last_month.strftime("%Y-%m-%d")) + prof_param)
         if not df_prof.empty:
             df_prof["Resultado"] = df_prof["Receitas"] - df_prof["Despesas"]
@@ -495,9 +495,9 @@ if page == "Dashboard":
 
     st.markdown("---")
     st.subheader("Ultimas 10 Transacoes")
-    df_last = q("""SELECT t.date_competencia as Data, t.description as Descricao,
-               t.type as Tipo, t.amount as Valor, t.payment_method as Forma,
-               t.status as Status, b.name as Banco
+    df_last = q("""SELECT t.date_competencia as "Data", t.description as "Descricao",
+               t.type as "Tipo", t.amount as "Valor", t.payment_method as "Forma",
+               t.status as "Status", b.name as "Banco"
         FROM transactions t LEFT JOIN banks b ON t.bank_id=b.id
         WHERE t.company_id=?""" + prof_sql + """
         ORDER BY t.created_at DESC LIMIT 10""", (cid,) + prof_param)
@@ -824,8 +824,8 @@ elif page == "Transferencia":
 
     st.markdown("---")
     st.subheader("Historico de Transferencias")
-    df_transf = q("""SELECT t.date_competencia as Data, t.description as Descricao,
-               t.amount as Valor, t.type as Tipo, b.name as Banco
+    df_transf = q("""SELECT t.date_competencia as "Data", t.description as "Descricao",
+               t.amount as "Valor", t.type as "Tipo", b.name as "Banco"
         FROM transactions t LEFT JOIN banks b ON t.bank_id=b.id
         WHERE t.company_id=? AND t.payment_method='transferencia'
         ORDER BY t.date_competencia DESC, t.created_at DESC LIMIT 50""", (cid,))
@@ -867,12 +867,12 @@ elif page == "Extrato":
     campo_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
     ordem_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
 
-    sql = """SELECT t.id, t.date_competencia as Competencia, t.date_caixa as Caixa,
-               t.description as Descricao, t.type as Tipo, t.amount as Valor,
-               t.payment_method as Forma, t.status as Status,
-               b.name as Banco, c.name as Categoria,
-               COALESCE(p.name, '-') as Profissional,
-               t.installment_num as Parc, t.installment_total as Total_Parc
+    sql = """SELECT t.id, t.date_competencia as "Competencia", t.date_caixa as "Caixa",
+               t.description as "Descricao", t.type as "Tipo", t.amount as "Valor",
+               t.payment_method as "Forma", t.status as "Status",
+               b.name as "Banco", c.name as "Categoria",
+               COALESCE(p.name, '-') as "Profissional",
+               t.installment_num as "Parc", t.installment_total as "Total_Parc"
         FROM transactions t
         LEFT JOIN banks b ON t.bank_id=b.id
         LEFT JOIN categories c ON t.category_id=c.id
@@ -977,11 +977,11 @@ elif page == "Extrato":
 elif page == "Parcelas Cartao":
     st.title("Parcelas de Cartao de Credito")
     today = date.today()
-    df = q("""SELECT t.id, t.date_competencia as Competencia, t.date_caixa as Recebimento,
-               t.description as Descricao, t.amount as Valor, t.status as Status,
-               t.payment_method as Cartao, b.name as Banco,
-               t.installment_num as Num, t.installment_total as Total,
-               t.installment_group as Grupo
+    df = q("""SELECT t.id, t.date_competencia as "Competencia", t.date_caixa as "Recebimento",
+               t.description as "Descricao", t.amount as "Valor", t.status as "Status",
+               t.payment_method as "Cartao", b.name as "Banco",
+               t.installment_num as "Num", t.installment_total as "Total",
+               t.installment_group as "Grupo"
         FROM transactions t LEFT JOIN banks b ON t.bank_id=b.id
         WHERE t.company_id=?
           AND t.payment_method NOT IN (
