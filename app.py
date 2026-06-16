@@ -35,22 +35,28 @@ def get_conn():
         import urllib.parse, socket
         url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
         host = url.hostname
-        # Forcar IPv4 — Streamlit Cloud nao suporta IPv6 para Supabase
+        port = url.port or 5432
+        # Mostrar debug de conexao
         try:
-            ipv4_list = socket.getaddrinfo(host, url.port or 5432, socket.AF_INET)
-            if ipv4_list:
-                host = ipv4_list[0][4][0]
-        except Exception:
-            pass
-        return psycopg2.connect(
-            host=host,
-            port=url.port or 5432,
-            dbname=url.path.lstrip("/"),
-            user=url.username,
-            password=url.password,
-            sslmode="require",
-            connect_timeout=10,
-        )
+            all_addrs = socket.getaddrinfo(host, port)
+            ipv4_addrs = [a[4][0] for a in all_addrs if a[0] == socket.AF_INET]
+            debug_host = ipv4_addrs[0] if ipv4_addrs else host
+        except Exception as dns_err:
+            debug_host = host
+            st.warning(f"DNS: {dns_err}")
+        try:
+            return psycopg2.connect(
+                host=debug_host,
+                port=port,
+                dbname=url.path.lstrip("/"),
+                user=url.username,
+                password=url.password,
+                sslmode="require",
+                connect_timeout=10,
+            )
+        except Exception as conn_err:
+            st.error(f"Erro de conexao: host={debug_host} port={port} user={url.username} db={url.path.lstrip('/')} | {type(conn_err).__name__}: {conn_err}")
+            raise
     return sqlite3.connect(DB_PATH)
 
 def q(sql, params=()):
