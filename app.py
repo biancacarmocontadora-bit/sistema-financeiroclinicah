@@ -32,10 +32,18 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financeiro.d
 
 def get_conn():
     if USE_POSTGRES:
-        import urllib.parse
+        import urllib.parse, socket
         url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
+        host = url.hostname
+        # Forcar IPv4 — Streamlit Cloud nao suporta IPv6 para Supabase
+        try:
+            ipv4_list = socket.getaddrinfo(host, url.port or 5432, socket.AF_INET)
+            if ipv4_list:
+                host = ipv4_list[0][4][0]
+        except Exception:
+            pass
         return psycopg2.connect(
-            host=url.hostname,
+            host=host,
             port=url.port or 5432,
             dbname=url.path.lstrip("/"),
             user=url.username,
