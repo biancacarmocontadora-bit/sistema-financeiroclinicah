@@ -1,0 +1,148 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Editar' if ag else 'Novo' }} Agendamento{% endblock %}
+{% block page_title %}{{ 'Editar' if ag else 'Novo' }} Agendamento{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-body p-4">
+        <form method="post">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">Paciente *</label>
+              <input type="text" name="paciente" class="form-control" required value="{{ ag.paciente if ag else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Médico</label>
+              <input type="text" name="medico" class="form-control" value="{{ ag.medico if ag else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Especialidade</label>
+              <input type="text" name="especialidade" class="form-control" value="{{ ag.especialidade if ag else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Data e Hora *</label>
+              <input type="datetime-local" name="data_hora" class="form-control" required
+                value="{{ ag.data_hora.strftime('%Y-%m-%dT%H:%M') if ag else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Status</label>
+              <select name="status" class="form-select">
+                {% for k, v in status_labels.items() %}
+                <option value="{{ k }}" {{ 'selected' if ag and ag.status == k }}>{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Convênio / Plano</label>
+              <input type="text" name="convenio" class="form-control" value="{{ ag.convenio if ag else '' }}" placeholder="Particular">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Procedimento</label>
+              <input type="text" name="tipo_consulta" class="form-control" value="{{ ag.tipo_consulta if ag else '' }}" placeholder="Ex: Consulta, Retorno, Exame...">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Valor (R$)</label>
+              <input type="number" name="valor" class="form-control" step="0.01" min="0" value="{{ ag.valor if ag else '0' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Forma de Pagamento</label>
+              <select name="forma_pagamento" id="formaPagamento" class="form-select" onchange="toggleCartao()">
+                <option value="">— não informado —</option>
+                <option value="dinheiro"  {{ 'selected' if ag and ag.forma_pagamento == 'dinheiro' }}>Dinheiro</option>
+                <option value="pix"       {{ 'selected' if ag and ag.forma_pagamento == 'pix' }}>Pix</option>
+                <option value="cartao"    {{ 'selected' if ag and ag.forma_pagamento == 'cartao' }}>Cartão</option>
+                <option value="convenio"  {{ 'selected' if ag and ag.forma_pagamento == 'convenio' }}>Convênio</option>
+                <option value="cheque"    {{ 'selected' if ag and ag.forma_pagamento == 'cheque' }}>Cheque</option>
+              </select>
+            </div>
+
+            <!-- Campos extras para cartão -->
+            <div id="divCartao" class="col-12" style="display:none">
+              <div class="row g-3 p-3 rounded" style="background:#f8f9fa;border:1px solid #dee2e6">
+                <div class="col-md-4">
+                  <label class="form-label">Modalidade</label>
+                  <select name="cartao_tipo" id="cartaoTipo" class="form-select" onchange="toggleParcelas()">
+                    <option value="debito"  {{ 'selected' if ag and ag.cartao_tipo == 'debito' }}>Débito</option>
+                    <option value="credito" {{ 'selected' if ag and ag.cartao_tipo == 'credito' }}>Crédito</option>
+                  </select>
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label">Bandeira</label>
+                  <select name="cartao_bandeira" class="form-select">
+                    <option value="visa"       {{ 'selected' if ag and ag.cartao_bandeira == 'visa' }}>Visa</option>
+                    <option value="mastercard" {{ 'selected' if ag and ag.cartao_bandeira == 'mastercard' }}>Mastercard</option>
+                    <option value="elo"        {{ 'selected' if ag and ag.cartao_bandeira == 'elo' }}>Elo</option>
+                    <option value="amex"       {{ 'selected' if ag and ag.cartao_bandeira == 'amex' }}>American Express</option>
+                    <option value="hipercard"  {{ 'selected' if ag and ag.cartao_bandeira == 'hipercard' }}>Hipercard</option>
+                    <option value="outros"     {{ 'selected' if ag and ag.cartao_bandeira == 'outros' }}>Outros</option>
+                  </select>
+                </div>
+                <div class="col-md-4" id="divParcelas" style="display:none">
+                  <label class="form-label">Parcelas</label>
+                  <select name="cartao_parcelas" class="form-select">
+                    {% for i in range(1, 13) %}
+                    <option value="{{ i }}" {{ 'selected' if ag and ag.cartao_parcelas == i }}>{{ i }}x</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <!-- Conta bancária — aparece para todas as formas exceto convênio -->
+            <div id="divConta" class="col-md-6" style="display:none">
+              <label class="form-label">Conta bancária</label>
+              <select name="conta_bancaria_id" id="contaBancariaCartao" class="form-select">
+                <option value="">— selecione —</option>
+              </select>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Observação</label>
+              <textarea name="observacao" class="form-control" rows="2">{{ ag.observacao if ag else '' }}</textarea>
+            </div>
+          </div>
+          <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+          <div class="d-flex gap-2 mt-4">
+            <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>Salvar</button>
+            <a href="{{ request.args.get('next') or url_for('agendamentos.lista') }}" class="btn btn-secondary">Cancelar</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Carrega contas bancárias no select
+fetch('/api/contas-bancarias').then(r => r.json()).then(contas => {
+  const sel = document.getElementById('contaBancariaCartao');
+  contas.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.nome + (c.banco ? ' — ' + c.banco : '');
+    if (c.id === {{ ag.conta_bancaria_id if ag and ag.conta_bancaria_id else 'null' }}) opt.selected = true;
+    sel.appendChild(opt);
+  });
+});
+
+function toggleCartao() {
+  const forma = document.getElementById('formaPagamento').value;
+  document.getElementById('divCartao').style.display = forma === 'cartao' ? '' : 'none';
+  document.getElementById('divConta').style.display = forma && forma !== 'convenio' ? '' : 'none';
+  if (forma === 'cartao') toggleParcelas();
+}
+
+function toggleParcelas() {
+  const tipo = document.getElementById('cartaoTipo').value;
+  document.getElementById('divParcelas').style.display = tipo === 'credito' ? '' : 'none';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  toggleCartao();
+});
+</script>
+{% endblock %}

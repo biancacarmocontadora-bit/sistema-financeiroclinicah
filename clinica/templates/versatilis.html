@@ -1,0 +1,182 @@
+{% extends 'base.html' %}
+{% block title %}Integração Versatilis{% endblock %}
+{% block page_title %}Integração Versatilis{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-6">
+    <!-- Configurações da API -->
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-gear me-2"></i>Configurações da API</div>
+      <div class="card-body">
+        <form id="formConfig">
+          <div class="mb-3">
+            <label class="form-label">URL base da API <span class="text-danger">*</span></label>
+            <input type="url" name="url_base" class="form-control" value="{{ configs.url_base }}"
+              placeholder="https://suaclinica.versatilis.com.br">
+            <div class="form-text">Endereço do sistema Versatilis da sua clínica</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Chave de API (Token)</label>
+            <input type="password" name="api_key" class="form-control" value="{{ configs.api_key }}"
+              placeholder="Token de autenticação">
+          </div>
+          <div class="row g-3 mb-3">
+            <div class="col">
+              <label class="form-label">Usuário</label>
+              <input type="text" name="usuario" class="form-control" value="{{ configs.usuario }}">
+            </div>
+            <div class="col">
+              <label class="form-label">Senha</label>
+              <input type="password" name="senha" class="form-control" value="{{ configs.senha }}">
+            </div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">ID da Clínica</label>
+            <input type="text" name="clinica_id" class="form-control" value="{{ configs.clinica_id }}"
+              placeholder="Código da clínica no Versatilis">
+          </div>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-primary btn-sm" onclick="salvarConfig()">
+              <i class="bi bi-save me-1"></i>Salvar configurações
+            </button>
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="testarConexao()">
+              <i class="bi bi-wifi me-1"></i>Testar conexão
+            </button>
+          </div>
+          <div id="resultadoTeste" class="mt-3"></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Sincronização -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-arrow-repeat me-2"></i>Sincronizar Agendamentos</div>
+      <div class="card-body">
+        <div class="row g-3 mb-3">
+          <div class="col">
+            <label class="form-label">Data inicial</label>
+            <input type="date" id="syncIni" class="form-control" value="{{ hoje }}">
+          </div>
+          <div class="col">
+            <label class="form-label">Data final</label>
+            <input type="date" id="syncFim" class="form-control" value="{{ hoje }}">
+          </div>
+        </div>
+        <button class="btn btn-success btn-sm" onclick="sincronizar()">
+          <i class="bi bi-cloud-download me-1"></i>Sincronizar agora
+        </button>
+        <div class="mt-3 text-muted small">
+          Última sincronização: <strong>{{ configs.ultimo_sync }}</strong>
+        </div>
+        <div id="resultadoSync" class="mt-3"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-6">
+    <!-- Importação CSV manual -->
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-file-earmark-spreadsheet me-2"></i>Importação via CSV (Versatilis)</div>
+      <div class="card-body">
+        <div class="alert alert-info small">
+          <strong>Como exportar do Versatilis:</strong>
+          <ol class="mb-0 mt-1 ps-3">
+            <li>Acesse <strong>Relatórios → Agenda</strong> no Versatilis</li>
+            <li>Selecione o período desejado</li>
+            <li>Clique em <strong>Exportar → CSV</strong></li>
+            <li>Faça o upload do arquivo abaixo</li>
+          </ol>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Arquivo CSV ou Excel</label>
+          <input type="file" id="arquivoVersatilis" class="form-control" accept=".csv,.xlsx,.xls">
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="importarVersatilis()">
+          <i class="bi bi-upload me-1"></i>Importar arquivo
+        </button>
+        <div id="resultadoImport" class="mt-3"></div>
+      </div>
+    </div>
+
+    <!-- Mapeamento de colunas -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-table me-2"></i>Colunas reconhecidas automaticamente</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0">
+          <thead>
+            <tr><th>Campo</th><th>Nomes aceitos no CSV</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Paciente</td><td><code>paciente, nome, patient, nome_paciente</code></td></tr>
+            <tr><td>Data/Hora</td><td><code>data_hora, data, date, data_agendamento</code></td></tr>
+            <tr><td>Hora</td><td><code>hora, time</code></td></tr>
+            <tr><td>Médico</td><td><code>medico, médico, profissional</code></td></tr>
+            <tr><td>Especialidade</td><td><code>especialidade, specialty</code></td></tr>
+            <tr><td>Status</td><td><code>status, situacao, situação</code></td></tr>
+            <tr><td>Convênio</td><td><code>convenio, convênio, plano</code></td></tr>
+            <tr><td>Valor</td><td><code>valor, value, preco</code></td></tr>
+            <tr><td>ID externo</td><td><code>id, codigo, id_agendamento</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const hoje = new Date().toISOString().split('T')[0];
+
+async function salvarConfig() {
+  const form = document.getElementById('formConfig');
+  const fd = new FormData(form);
+  const r = await fetch('/versatilis/salvar-config', { method: 'POST', body: fd });
+  const res = await r.json();
+  if (res.ok) showToast('Configurações salvas!');
+  else showToast('Erro ao salvar', 'danger');
+}
+
+async function testarConexao() {
+  const div = document.getElementById('resultadoTeste');
+  div.innerHTML = '<div class="alert alert-info small">Testando...</div>';
+  await salvarConfig();
+  const res = await apiPost('/versatilis/testar-conexao', {});
+  if (res.ok) {
+    div.innerHTML = `<div class="alert alert-success small"><i class="bi bi-check-circle me-1"></i>${res.mensagem}</div>`;
+  } else {
+    div.innerHTML = `<div class="alert alert-danger small"><i class="bi bi-x-circle me-1"></i>${res.erro}</div>`;
+  }
+}
+
+async function sincronizar() {
+  const ini = document.getElementById('syncIni').value;
+  const fim = document.getElementById('syncFim').value;
+  const div = document.getElementById('resultadoSync');
+  div.innerHTML = '<div class="alert alert-info small">Sincronizando...</div>';
+  const res = await apiPost('/versatilis/sincronizar', { data_ini: ini, data_fim: fim });
+  if (res.ok) {
+    div.innerHTML = `<div class="alert alert-success small">✓ ${res.inseridos} inseridos, ${res.atualizados} atualizados</div>`;
+  } else {
+    div.innerHTML = `<div class="alert alert-warning small">${res.erro}${res.dica ? '<br><em>' + res.dica + '</em>' : ''}</div>`;
+  }
+}
+
+async function importarVersatilis() {
+  const file = document.getElementById('arquivoVersatilis').files[0];
+  if (!file) { showToast('Selecione um arquivo', 'warning'); return; }
+  const fd = new FormData();
+  fd.append('arquivo', file);
+  const div = document.getElementById('resultadoImport');
+  div.innerHTML = '<div class="alert alert-info small">Importando...</div>';
+  const r = await fetch('/agendamentos/importar', { method: 'POST', body: fd });
+  const res = await r.json();
+  if (res.ok) {
+    div.innerHTML = `<div class="alert alert-success small">✓ ${res.inseridos} inseridos, ${res.atualizados} atualizados, ${res.erros} erros</div>`;
+  } else {
+    div.innerHTML = `<div class="alert alert-danger small">${res.erro}</div>`;
+  }
+}
+</script>
+{% endblock %}

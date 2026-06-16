@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+{% block title %}Agendamentos{% endblock %}
+{% block page_title %}Agendamentos{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#modalImportar">
+  <i class="bi bi-upload"></i> Importar CSV
+</button>
+<a href="{{ url_for('agendamentos.novo') }}" class="btn btn-primary btn-sm">
+  <i class="bi bi-plus-lg"></i> Novo
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">De</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          {% for k,v in status_labels.items() %}
+          <option value="{{ k }}" {{ 'selected' if filtros.status == k }}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Médico</label>
+        <select name="medico" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          {% for m in medicos %}
+          <option value="{{ m }}" {{ 'selected' if filtros.medico == m }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-8 col-md-3">
+        <label class="form-label form-label-sm mb-1">Paciente</label>
+        <input type="text" name="busca" class="form-control form-control-sm" placeholder="Buscar..." value="{{ filtros.busca }}">
+      </div>
+      <div class="col-sm-4 col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Data/Hora</th><th>Paciente</th><th>Médico</th>
+            <th>Especialidade</th><th>Procedimento</th><th>Convênio</th><th>Valor</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ag in agendamentos.items %}
+          <tr>
+            <td>{{ ag.data_hora.strftime('%d/%m/%Y %H:%M') }}</td>
+            <td>{{ ag.paciente }}</td>
+            <td>{{ ag.medico or '—' }}</td>
+            <td>{{ ag.especialidade or '—' }}</td>
+            <td>{{ ag.tipo_consulta or '—' }}</td>
+            <td>{{ ag.convenio or 'Particular' }}</td>
+            <td>{% if ag.valor %}R$ {{ "%.2f"|format(ag.valor) }}{% else %}—{% endif %}</td>
+            <td><span class="badge badge-{{ ag.status }}">{{ status_labels.get(ag.status, ag.status) }}</span></td>
+            <td>
+              <div class="d-flex gap-1">
+                <a href="{{ url_for('agendamentos.editar', id=ag.id) }}?next={{ request.url | urlencode }}" class="btn btn-sm btn-light"><i class="bi bi-pencil"></i></a>
+                <div class="dropdown">
+                  <button class="btn btn-sm btn-light" data-bs-toggle="dropdown"><i class="bi bi-three-dots"></i></button>
+                  <ul class="dropdown-menu">
+                    {% for s, l in status_labels.items() %}
+                    <li><a class="dropdown-item" onclick="alterarStatus({{ ag.id }}, '{{ s }}')">→ {{ l }}</a></li>
+                    {% endfor %}
+                  </ul>
+                </div>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="text-center py-4 text-muted">Nenhum agendamento encontrado</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if agendamentos.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ agendamentos.total }} registros</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% if agendamentos.has_prev %}
+        <li class="page-item"><a class="page-link" href="?page={{ agendamentos.prev_num }}&{{ request.query_string.decode().replace('page='+agendamentos.page|string,'') }}">‹</a></li>
+        {% endif %}
+        <li class="page-item active"><a class="page-link" href="#">{{ agendamentos.page }}/{{ agendamentos.pages }}</a></li>
+        {% if agendamentos.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ agendamentos.next_num }}&{{ request.query_string.decode().replace('page='+agendamentos.page|string,'') }}">›</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal Importar -->
+<div class="modal fade" id="modalImportar" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-upload me-2"></i>Importar Agendamentos</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="alert alert-info small">
+          <strong>Versatilis (.xls):</strong> Cole o caminho completo do arquivo .xls no campo abaixo. O sistema localiza os dados automaticamente.<br>
+          <strong>Outros formatos:</strong> CSV e XLSX podem ser selecionados pelo botão de arquivo.
+        </div>
+
+        <!-- Opção 1: caminho local (Versatilis .xls) -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Caminho do arquivo .xls (Versatilis)</label>
+          <input type="text" id="caminhoLocal" class="form-control font-monospace"
+            placeholder='Ex: C:\Users\Nome\Documents\janeiro.xls'>
+          <div class="form-text">Cole aqui o caminho — o sistema lê os dados automaticamente.</div>
+        </div>
+
+        <div class="text-center text-muted small my-2">— ou selecione CSV / XLSX —</div>
+
+        <!-- Opção 2: upload de arquivo -->
+        <div class="mb-3">
+          <label class="form-label">Arquivo CSV ou XLSX</label>
+          <input type="file" id="arquivoImport" class="form-control" accept=".csv,.xlsx,.htm,.html">
+        </div>
+        <div id="resultadoImport"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="importarArquivo()">
+          <i class="bi bi-upload"></i> Importar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function alterarStatus(id, status) {
+  const res = await apiPost(`/agendamentos/${id}/status`, { status });
+  if (res.ok) { showToast('Status atualizado!'); setTimeout(() => location.reload(), 700); }
+  else showToast('Erro ao atualizar', 'danger');
+}
+
+async function importarArquivo() {
+  const caminho = document.getElementById('caminhoLocal').value.trim();
+  const file = document.getElementById('arquivoImport').files[0];
+  if (!caminho && !file) { showToast('Informe o caminho ou selecione um arquivo', 'warning'); return; }
+
+  const fd = new FormData();
+  if (caminho) {
+    fd.append('caminho_local', caminho);
+  } else {
+    fd.append('arquivo', file);
+  }
+
+  const div = document.getElementById('resultadoImport');
+  div.innerHTML = '<div class="text-muted small">Importando...</div>';
+  const r = await fetch('/agendamentos/importar', { method: 'POST', body: fd });
+  const res = await r.json();
+  if (res.ok) {
+    div.innerHTML = `<div class="alert alert-success small">✓ ${res.inseridos} inseridos, ${res.atualizados} atualizados, ${res.erros} erros</div>`;
+    setTimeout(() => location.reload(), 1500);
+  } else {
+    div.innerHTML = `<div class="alert alert-danger small">${res.erro}</div>`;
+  }
+}
+</script>
+{% endblock %}

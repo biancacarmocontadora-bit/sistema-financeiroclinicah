@@ -1,0 +1,238 @@
+{% extends 'base.html' %}
+{% block title %}Recebíveis — Cartão{% endblock %}
+{% block page_title %}Recebíveis Provisionados — Cartão{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('cartao.lista') }}" class="btn btn-outline-secondary btn-sm">
+  <i class="bi bi-arrow-left"></i> Voltar
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-md-4">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#1a6fc4,#2d8fd8)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_pendente) }}</div>
+          <div class="kpi-label">Total a receber (líquido)</div>
+        </div>
+        <i class="bi bi-hourglass-split kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-md-4">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_vencido) }}</div>
+          <div class="kpi-label">Atrasados (data prevista passada)</div>
+        </div>
+        <i class="bi bi-exclamation-triangle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          <option value="pendente" {{ 'selected' if filtros.status == 'pendente' }}>Pendente</option>
+          <option value="recebido" {{ 'selected' if filtros.status == 'recebido' }}>Recebido</option>
+          <option value="cancelado" {{ 'selected' if filtros.status == 'cancelado' }}>Cancelado</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Previsão de</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+      <div class="col-md-3 ms-auto text-end">
+        <button type="button" class="btn btn-success btn-sm" onclick="receberSelecionados()">
+          <i class="bi bi-check2-all me-1"></i>Marcar selecionados como recebido
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="checkAll"></th>
+            <th>Previsão</th>
+            <th>Paciente</th>
+            <th>Bandeira</th>
+            <th class="text-center">Parcela</th>
+            <th class="text-end">Bruto</th>
+            <th class="text-end text-danger">Taxa</th>
+            <th class="text-end text-success">Líquido</th>
+            <th>Status</th>
+            <th>Recebido em</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in parcelas.items %}
+          <tr class="{{ 'table-danger' if p.status == 'pendente' and p.data_prevista.strftime('%Y-%m-%d') < hoje else '' }}">
+            <td>
+              {% if p.status == 'pendente' %}
+              <input type="checkbox" class="chk-parcela" value="{{ p.id }}"
+                data-valor="{{ p.valor_liquido_parcela }}">
+              {% endif %}
+            </td>
+            <td>
+              <strong>{{ p.data_prevista.strftime('%d/%m/%Y') }}</strong>
+              {% if p.status == 'pendente' and p.data_prevista.strftime('%Y-%m-%d') < hoje %}
+              <span class="badge bg-danger ms-1" style="font-size:0.65rem">Atrasado</span>
+              {% endif %}
+            </td>
+            <td>{{ p.pagamento.paciente }}</td>
+            <td>
+              <span class="badge" style="background:{{ {'Visa':'#1a1f71','Mastercard':'#eb001b','Elo':'#b8860b','Amex':'#016fd0','Hipercard':'#8b0000'}.get(p.pagamento.bandeira,'#6b7280') }}">
+                {{ p.pagamento.bandeira }}
+              </span>
+            </td>
+            <td class="text-center">
+              <span class="badge bg-light text-dark border">
+                {{ p.numero }}/{{ p.pagamento.num_parcelas }}
+              </span>
+            </td>
+            <td class="text-end">R$ {{ "%.2f"|format(p.valor_bruto_parcela) }}</td>
+            <td class="text-end text-danger">- R$ {{ "%.2f"|format(p.taxa_parcela) }}</td>
+            <td class="text-end fw-semibold text-success">R$ {{ "%.2f"|format(p.valor_liquido_parcela) }}</td>
+            <td>
+              {% if p.status == 'pendente' %}
+              <span class="badge bg-warning text-dark">Pendente</span>
+              {% elif p.status == 'recebido' %}
+              <span class="badge bg-success">Recebido</span>
+              {% else %}
+              <span class="badge bg-secondary">{{ p.status }}</span>
+              {% endif %}
+            </td>
+            <td>{{ p.data_recebimento.strftime('%d/%m/%Y') if p.data_recebimento else '—' }}</td>
+            <td>
+              {% if p.status == 'pendente' %}
+              <button class="btn btn-sm btn-success" onclick="receberParcela({{ p.id }}, this)" title="Marcar recebido">
+                <i class="bi bi-check-lg"></i>
+              </button>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="11" class="text-center py-4 text-muted">Nenhuma parcela encontrada</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if parcelas.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ parcelas.total }} parcelas</small>
+    <nav><ul class="pagination pagination-sm mb-0">
+      {% if parcelas.has_prev %}<li class="page-item"><a class="page-link" href="?page={{ parcelas.prev_num }}">‹</a></li>{% endif %}
+      <li class="page-item active"><a class="page-link" href="#">{{ parcelas.page }}/{{ parcelas.pages }}</a></li>
+      {% if parcelas.has_next %}<li class="page-item"><a class="page-link" href="?page={{ parcelas.next_num }}">›</a></li>{% endif %}
+    </ul></nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal receber em lote -->
+<div class="modal fade" id="modalReceberLote" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title">Receber parcelas</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Conta bancária</label>
+          <input type="text" id="contaReceber" class="form-control form-control-sm" placeholder="Ex: Bradesco Corrente" value="Principal">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Data de recebimento</label>
+          <input type="date" id="dataReceber" class="form-control form-control-sm" value="{{ hoje }}">
+        </div>
+        <div class="text-center">
+          <div class="text-muted small">Total líquido</div>
+          <div class="fs-5 fw-bold text-success" id="totalReceberLote">R$ 0,00</div>
+          <div class="text-muted small" id="qtdReceberLote"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-success btn-sm" onclick="confirmarReceberLote()">
+          <i class="bi bi-check-lg"></i> Confirmar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let idsSelecionados = [];
+
+document.getElementById('checkAll').addEventListener('change', function () {
+  document.querySelectorAll('.chk-parcela').forEach(c => c.checked = this.checked);
+  atualizarSelecionados();
+});
+document.querySelectorAll('.chk-parcela').forEach(c => c.addEventListener('change', atualizarSelecionados));
+
+function atualizarSelecionados() {
+  idsSelecionados = [];
+  let total = 0;
+  document.querySelectorAll('.chk-parcela:checked').forEach(c => {
+    idsSelecionados.push(parseInt(c.value));
+    total += parseFloat(c.dataset.valor);
+  });
+  document.getElementById('totalReceberLote').textContent = 'R$ ' + total.toFixed(2).replace('.', ',');
+  document.getElementById('qtdReceberLote').textContent = idsSelecionados.length + ' parcela(s) selecionada(s)';
+}
+
+function receberSelecionados() {
+  if (idsSelecionados.length === 0) { showToast('Selecione ao menos uma parcela', 'warning'); return; }
+  new bootstrap.Modal(document.getElementById('modalReceberLote')).show();
+}
+
+async function confirmarReceberLote() {
+  const conta = document.getElementById('contaReceber').value;
+  const data = document.getElementById('dataReceber').value;
+  let ok = 0, erros = 0;
+  for (const id of idsSelecionados) {
+    const res = await apiPost(`/cartao/parcela/${id}/receber`, { conta, data_recebimento: data });
+    if (res.ok) ok++; else erros++;
+  }
+  bootstrap.Modal.getInstance(document.getElementById('modalReceberLote')).hide();
+  showToast(`${ok} parcela(s) recebida(s)${erros ? ', ' + erros + ' erro(s)' : ''}`);
+  setTimeout(() => location.reload(), 800);
+}
+
+async function receberParcela(id, btn) {
+  const conta = prompt('Conta bancária:', 'Principal');
+  if (conta === null) return;
+  const data = new Date().toISOString().split('T')[0];
+  const res = await apiPost(`/cartao/parcela/${id}/receber`, { conta, data_recebimento: data });
+  if (res.ok) { showToast('Parcela recebida! Lançamento criado no extrato.'); setTimeout(() => location.reload(), 700); }
+  else showToast(res.erro, 'danger');
+}
+</script>
+{% endblock %}

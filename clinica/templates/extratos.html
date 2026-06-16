@@ -1,0 +1,378 @@
+{% extends 'base.html' %}
+{% block title %}Extratos{% endblock %}
+{% block page_title %}
+  Extrato{% if conta_selecionada %} — {{ conta_selecionada.nome }}{% endif %}
+{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#modalImportarOFX">
+  <i class="bi bi-file-earmark-arrow-up"></i> Importar OFX/CSV
+</button>
+<button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalNovoLanc">
+  <i class="bi bi-plus-lg"></i> Lançamento Manual
+</button>
+{% endblock %}
+
+{% block content %}
+
+<!-- Cards de saldo por conta (topo) -->
+<div class="row g-2 mb-3">
+  {% for c in contas_cadastradas %}
+  <div class="col-6 col-md-3 col-xl-auto" style="min-width:160px">
+    <a href="?conta_id={{ c.id }}" class="text-decoration-none">
+      <div class="card h-100 {{ 'border-primary' if conta_selecionada and conta_selecionada.id == c.id else '' }}"
+           style="{{ 'box-shadow:0 0 0 2px #1a6fc4' if conta_selecionada and conta_selecionada.id == c.id else '' }}">
+        <div class="card-body py-2 px-3">
+          <div class="text-muted" style="font-size:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ c.nome }}</div>
+          <div class="fw-bold {{ 'text-success' if c.saldo_atual >= 0 else 'text-danger' }}" style="font-size:.95rem">
+            R$ {{ "%.2f"|format(c.saldo_atual) }}
+          </div>
+          <div class="text-muted" style="font-size:.65rem">{{ c.banco or c.tipo }}</div>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+  <div class="col-6 col-md-3 col-xl-auto" style="min-width:160px">
+    <a href="?conta_id=" class="text-decoration-none">
+      <div class="card h-100 {{ 'border-primary' if not conta_selecionada else '' }}">
+        <div class="card-body py-2 px-3">
+          <div class="text-muted" style="font-size:.7rem">Todas as contas</div>
+          <div class="fw-bold" style="font-size:.95rem">
+            R$ {{ "%.2f"|format(contas_cadastradas|sum(attribute='saldo_atual')) }}
+          </div>
+          <div class="text-muted" style="font-size:.65rem">Consolidado</div>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+
+<!-- Totais do filtro -->
+<div class="row g-3 mb-3">
+  <div class="col-sm-4">
+    <div class="d-flex align-items-center gap-2 p-3 rounded" style="background:#dcfce7">
+      <i class="bi bi-arrow-down-circle-fill text-success fs-4"></i>
+      <div>
+        <div style="font-size:.72rem;color:#166534;text-transform:uppercase">Receitas</div>
+        <div class="fw-bold text-success">R$ {{ "%.2f"|format(total_receitas) }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="d-flex align-items-center gap-2 p-3 rounded" style="background:#fee2e2">
+      <i class="bi bi-arrow-up-circle-fill text-danger fs-4"></i>
+      <div>
+        <div style="font-size:.72rem;color:#991b1b;text-transform:uppercase">Despesas</div>
+        <div class="fw-bold text-danger">R$ {{ "%.2f"|format(total_despesas) }}</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="d-flex align-items-center gap-2 p-3 rounded" style="background:{{ '#dbeafe' if saldo_filtro >= 0 else '#fae8ff' }}">
+      <i class="bi bi-wallet2 fs-4" style="color:{{ '#1d4ed8' if saldo_filtro >= 0 else '#7e22ce' }}"></i>
+      <div>
+        <div style="font-size:.72rem;text-transform:uppercase;color:{{ '#1d4ed8' if saldo_filtro >= 0 else '#7e22ce' }}">Resultado</div>
+        <div class="fw-bold" style="color:{{ '#1d4ed8' if saldo_filtro >= 0 else '#7e22ce' }}">R$ {{ "%.2f"|format(saldo_filtro) }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <input type="hidden" name="conta_id" value="{{ filtros.conta_id }}">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">De</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Tipo</label>
+        <select name="tipo" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          <option value="credito" {{ 'selected' if filtros.tipo == 'credito' }}>Receita (crédito)</option>
+          <option value="debito"  {{ 'selected' if filtros.tipo == 'debito' }}>Despesa (débito)</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-3">
+        <label class="form-label form-label-sm mb-1">Médico</label>
+        <select name="medico" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          {% for m in medicos_lista %}
+          <option value="{{ m }}" {{ 'selected' if filtros.medico == m }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+      {% if filtros.data_ini or filtros.data_fim or filtros.tipo or filtros.medico %}
+      <div class="col-md-1">
+        <a href="?conta_id={{ filtros.conta_id }}" class="btn btn-outline-secondary btn-sm w-100" title="Limpar filtros">
+          <i class="bi bi-x-lg"></i>
+        </a>
+      </div>
+      {% endif %}
+    </form>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Conta</th>
+            <th>Descrição</th>
+            <th>Médico</th>
+            <th>Categoria</th>
+            <th>Tipo</th>
+            <th class="text-end">Valor</th>
+            <th>Orig.</th>
+            <th><i class="bi bi-check2-square" title="Conciliado"></i></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for l in lancamentos.items %}
+          <tr>
+            <td class="text-nowrap">{{ l.data.strftime('%d/%m/%Y') }}</td>
+            <td class="text-nowrap">
+              <small class="text-muted">{{ l.conta }}</small>
+            </td>
+            <td>{{ l.descricao }}</td>
+            <td>
+              {% if l.medico %}
+              <span class="badge bg-light text-dark border" style="font-size:.72rem">{{ l.medico }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-muted small">{{ l.categoria or '—' }}</td>
+            <td>
+              <span class="badge {{ 'bg-success' if l.tipo == 'credito' else 'bg-danger' }}">
+                {{ 'Receita' if l.tipo == 'credito' else 'Despesa' }}
+              </span>
+            </td>
+            <td class="text-end fw-semibold {{ 'text-success' if l.valor >= 0 else 'text-danger' }}">
+              R$ {{ "%.2f"|format(l.valor|abs) }}
+            </td>
+            <td><span class="badge bg-secondary" style="font-size:.65rem">{{ l.origem }}</span></td>
+            <td>
+              {% if l.conciliado %}
+              <i class="bi bi-check-circle-fill text-success"></i>
+              {% else %}
+              <i class="bi bi-circle text-muted"></i>
+              {% endif %}
+            </td>
+            <td>
+              <button class="btn btn-sm btn-light text-danger" onclick="excluirLanc({{ l.id }}, this)">
+                <i class="bi bi-trash"></i>
+              </button>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="10" class="text-center py-5 text-muted">
+              <i class="bi bi-inbox" style="font-size:2rem"></i>
+              <p class="mt-2 mb-0">Nenhum lançamento encontrado.</p>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if lancamentos.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ lancamentos.total }} registros</small>
+    <nav><ul class="pagination pagination-sm mb-0">
+      {% if lancamentos.has_prev %}
+      <li class="page-item"><a class="page-link" href="?page={{ lancamentos.prev_num }}&conta_id={{ filtros.conta_id }}&data_ini={{ filtros.data_ini }}&data_fim={{ filtros.data_fim }}&tipo={{ filtros.tipo }}&medico={{ filtros.medico }}">‹</a></li>
+      {% endif %}
+      <li class="page-item active"><a class="page-link" href="#">{{ lancamentos.page }}/{{ lancamentos.pages }}</a></li>
+      {% if lancamentos.has_next %}
+      <li class="page-item"><a class="page-link" href="?page={{ lancamentos.next_num }}&conta_id={{ filtros.conta_id }}&data_ini={{ filtros.data_ini }}&data_fim={{ filtros.data_fim }}&tipo={{ filtros.tipo }}&medico={{ filtros.medico }}">›</a></li>
+      {% endif %}
+    </ul></nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal Importar OFX/CSV -->
+<div class="modal fade" id="modalImportarOFX" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Importar Extrato</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Conta bancária *</label>
+          <select id="contaImportId" class="form-select">
+            {% for c in contas_cadastradas %}
+            <option value="{{ c.id }}" {{ 'selected' if conta_selecionada and conta_selecionada.id == c.id }}>
+              {{ c.nome }}{% if c.banco %} — {{ c.banco }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <ul class="nav nav-tabs mb-3" id="tabImport">
+          <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tabOFX">OFX</a></li>
+          <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tabCSV">CSV / Excel</a></li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="tabOFX">
+            <div class="alert alert-info small">Exporte o extrato do internet banking no formato <strong>.ofx</strong></div>
+            <input type="file" id="arquivoOFX" class="form-control" accept=".ofx">
+          </div>
+          <div class="tab-pane fade" id="tabCSV">
+            <div class="alert alert-info small">CSV com colunas: <code>data, descricao, valor</code></div>
+            <input type="file" id="arquivoCSV" class="form-control" accept=".csv,.xlsx,.xls">
+          </div>
+        </div>
+        <div id="resultadoImportExt" class="mt-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="importarExtrato()">Importar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal Novo Lançamento -->
+<div class="modal fade" id="modalNovoLanc" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Novo Lançamento</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Conta bancária *</label>
+            <select id="nContaId" class="form-select">
+              {% for c in contas_cadastradas %}
+              <option value="{{ c.id }}" {{ 'selected' if conta_selecionada and conta_selecionada.id == c.id }}>
+                {{ c.nome }}{% if c.banco %} — {{ c.banco }}{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Data *</label>
+            <input type="date" id="nData" class="form-control" value="{{ hoje }}">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Tipo *</label>
+            <select id="nTipo" class="form-select">
+              <option value="debito">Despesa (débito)</option>
+              <option value="credito">Receita (crédito)</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Descrição *</label>
+            <input type="text" id="nDesc" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Valor (R$) *</label>
+            <input type="number" id="nValor" class="form-control" step="0.01" min="0">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Médico</label>
+            <input type="text" id="nMedico" class="form-control" list="listaMedicos" placeholder="Opcional">
+            <datalist id="listaMedicos">
+              {% for m in medicos_lista %}<option value="{{ m }}">{% endfor %}
+            </datalist>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Categoria</label>
+            <input type="text" id="nCategoria" class="form-control" placeholder="Ex: Aluguel, Material, Receita consulta">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="salvarLancamento()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function importarExtrato() {
+  const contaId = document.getElementById('contaImportId').value;
+  const tabAtiva = document.querySelector('#tabImport .nav-link.active').textContent.trim();
+  const res = document.getElementById('resultadoImportExt');
+
+  let fd = new FormData();
+  fd.append('conta_id', contaId);
+
+  let url, file;
+  if (tabAtiva === 'OFX') {
+    file = document.getElementById('arquivoOFX').files[0];
+    url = '/extratos/importar-ofx';
+  } else {
+    file = document.getElementById('arquivoCSV').files[0];
+    url = '/extratos/importar-csv';
+  }
+  if (!file) { showToast('Selecione um arquivo', 'warning'); return; }
+  fd.append('arquivo', file);
+
+  res.innerHTML = '<div class="alert alert-info small">Importando...</div>';
+  const r = await fetch(url, { method: 'POST', body: fd });
+  const data = await r.json();
+  if (data.ok) {
+    res.innerHTML = `<div class="alert alert-success small">✓ ${data.inseridos} lançamentos importados${data.duplicados ? ', ' + data.duplicados + ' duplicatas ignoradas' : ''}</div>`;
+    setTimeout(() => location.reload(), 1500);
+  } else {
+    res.innerHTML = `<div class="alert alert-danger small">${data.erro}</div>`;
+  }
+}
+
+async function salvarLancamento() {
+  const contaId = document.getElementById('nContaId').value;
+  const data_v = document.getElementById('nData').value;
+  const desc = document.getElementById('nDesc').value;
+  const valor = parseFloat(document.getElementById('nValor').value);
+  const tipo = document.getElementById('nTipo').value;
+  const medico = document.getElementById('nMedico').value;
+  const categoria = document.getElementById('nCategoria').value;
+
+  if (!contaId || !data_v || !desc || isNaN(valor)) {
+    showToast('Preencha todos os campos obrigatórios', 'warning'); return;
+  }
+
+  const valorFinal = tipo === 'debito' ? -Math.abs(valor) : Math.abs(valor);
+  const res = await apiPost('/extratos/novo', {
+    conta_id: contaId, data: data_v, descricao: desc,
+    valor: valorFinal, tipo, medico, categoria,
+  });
+  if (res.ok) {
+    showToast('Lançamento criado!');
+    bootstrap.Modal.getInstance(document.getElementById('modalNovoLanc')).hide();
+    setTimeout(() => location.reload(), 700);
+  } else {
+    showToast(res.erro, 'danger');
+  }
+}
+
+async function excluirLanc(id, btn) {
+  if (!confirm('Excluir este lançamento?')) return;
+  const res = await apiDelete(`/extratos/${id}`);
+  if (res.ok) { btn.closest('tr').remove(); showToast('Excluído!'); }
+}
+</script>
+{% endblock %}

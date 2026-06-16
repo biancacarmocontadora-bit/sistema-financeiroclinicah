@@ -1,0 +1,411 @@
+{% extends 'base.html' %}
+{% block title %}Contas a Receber{% endblock %}
+{% block page_title %}Contas a Receber{% endblock %}
+
+{% block content %}
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#1a6fc4,#2d8fd8)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_pendente) }}</div>
+          <div class="kpi-label">Total pendente</div>
+        </div>
+        <i class="bi bi-hourglass-split kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#16a34a,#22c55e)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_recebido_mes) }}</div>
+          <div class="kpi-label">Recebido este mês</div>
+        </div>
+        <i class="bi bi-check2-circle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_cancelado_mes) }}</div>
+          <div class="kpi-label">Cancelado (faltas) este mês</div>
+        </div>
+        <i class="bi bi-person-x kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          <option value="pendente"  {{ 'selected' if filtros.status == 'pendente' }}>Pendente</option>
+          <option value="recebido"  {{ 'selected' if filtros.status == 'recebido' }}>Recebido</option>
+          <option value="cancelado" {{ 'selected' if filtros.status == 'cancelado' }}>Cancelado</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Convênio</label>
+        <select name="convenio" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          {% for c in convenios %}
+          <option value="{{ c }}" {{ 'selected' if filtros.convenio == c }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Médico</label>
+        <select name="medico" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          {% for m in medicos %}
+          <option value="{{ m }}" {{ 'selected' if filtros.medico == m }}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">De</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Data consulta</th>
+            <th>Paciente</th>
+            <th>Médico</th>
+            <th>Convênio</th>
+            <th>Descrição</th>
+            <th class="text-end">Valor</th>
+            <th>Status</th>
+            <th>Forma pgto</th>
+            <th>Recebido em</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for cr in contas.items %}
+          <tr>
+            <td>{{ cr.data_prevista.strftime('%d/%m/%Y') }}</td>
+            <td>{{ cr.paciente }}</td>
+            <td>{{ cr.medico or '—' }}</td>
+            <td>{{ cr.convenio or 'Particular' }}</td>
+            <td class="text-muted small">{{ cr.descricao or '—' }}</td>
+            <td class="text-end">
+              {% if cr.status == 'pendente' %}
+              <span class="d-inline-flex align-items-center gap-1">
+                R$ <input type="number" class="form-control form-control-sm text-end"
+                  style="width:90px;display:inline-block"
+                  value="{{ '%.2f'|format(cr.valor) }}" step="0.01" min="0"
+                  onblur="atualizarValor({{ cr.id }}, this.value)">
+              </span>
+              {% else %}
+              <strong>R$ {{ "%.2f"|format(cr.valor) }}</strong>
+              {% endif %}
+            </td>
+            <td>
+              {% if cr.status == 'pendente' %}
+                <span class="badge bg-warning text-dark">Pendente</span>
+              {% elif cr.status == 'recebido' %}
+                <span class="badge bg-success">Recebido</span>
+              {% else %}
+                <span class="badge bg-secondary">Cancelado</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if cr.forma_pagamento %}
+              <span class="badge bg-light text-dark border">
+                {{ {'dinheiro':'Dinheiro','pix':'Pix','cartao':'Cartão','convenio':'Convênio','cheque':'Cheque'}.get(cr.forma_pagamento, cr.forma_pagamento) }}
+              </span>
+              {% else %}—{% endif %}
+            </td>
+            <td>{{ cr.data_recebimento.strftime('%d/%m/%Y') if cr.data_recebimento else '—' }}</td>
+            <td>
+              {% if cr.status == 'pendente' %}
+              <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-success"
+                  onclick="abrirModalReceber({{ cr.id }}, '{{ cr.paciente|e }}', {{ cr.valor }})"
+                  title="Dar baixa">
+                  <i class="bi bi-check-lg"></i>
+                </button>
+                <a href="{{ url_for('agendamentos.editar', id=cr.agendamento_id) }}"
+                  class="btn btn-sm btn-light" title="Ver agendamento">
+                  <i class="bi bi-calendar3"></i>
+                </a>
+                <button class="btn btn-sm btn-light text-danger"
+                  onclick="cancelarCR({{ cr.id }}, this)" title="Cancelar">
+                  <i class="bi bi-x-circle"></i>
+                </button>
+              </div>
+              {% elif cr.lancamento_id %}
+              <a href="{{ url_for('financeiro.extratos') }}" class="btn btn-sm btn-light" title="Ver extrato">
+                <i class="bi bi-bank"></i>
+              </a>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="10" class="text-center py-5 text-muted">
+              <i class="bi bi-inbox" style="font-size:2rem"></i>
+              <p class="mt-2 mb-0">Nenhuma conta encontrada.<br>
+              <small>Contas são geradas automaticamente ao agendar ou confirmar consultas.</small></p>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if contas.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ contas.total }} registros</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% if contas.has_prev %}
+        <li class="page-item"><a class="page-link" href="?page={{ contas.prev_num }}&status={{ filtros.status }}&convenio={{ filtros.convenio }}&data_ini={{ filtros.data_ini }}&data_fim={{ filtros.data_fim }}">‹</a></li>
+        {% endif %}
+        <li class="page-item active"><a class="page-link" href="#">{{ contas.page }}/{{ contas.pages }}</a></li>
+        {% if contas.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ contas.next_num }}&status={{ filtros.status }}&convenio={{ filtros.convenio }}&data_ini={{ filtros.data_ini }}&data_fim={{ filtros.data_fim }}">›</a></li>
+        {% endif %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Parcelas de Cartão -->
+{% if parcelas_cartao %}
+<div class="card mt-4">
+  <div class="card-header d-flex align-items-center gap-2">
+    <i class="bi bi-credit-card"></i>
+    <strong>Parcelas de Cartão</strong>
+    <span class="badge bg-secondary ms-1">{{ parcelas_cartao|length }}</span>
+  </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Vencimento</th>
+            <th>Paciente</th>
+            <th>Parcela</th>
+            <th>Bandeira</th>
+            <th class="text-end">Bruto</th>
+            <th class="text-end">Taxa</th>
+            <th class="text-end">Líquido</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in parcelas_cartao %}
+          <tr>
+            <td>{{ p.data_prevista.strftime('%d/%m/%Y') }}</td>
+            <td>{{ p.pagamento.agendamento.paciente if p.pagamento.agendamento else '—' }}</td>
+            <td class="text-muted small">{{ p.numero }}/{{ p.pagamento.num_parcelas }}</td>
+            <td>
+              <span class="badge bg-light text-dark border text-uppercase">{{ p.pagamento.bandeira }}</span>
+              <span class="badge bg-light text-dark border">{{ {'debito':'Débito','credito_1x':'Créd. 1x','credito_2_6x':'Créd. 2-6x','credito_7_12x':'Créd. 7-12x'}.get(p.pagamento.tipo, p.pagamento.tipo) }}</span>
+            </td>
+            <td class="text-end text-muted">R$ {{ "%.2f"|format(p.valor_bruto_parcela) }}</td>
+            <td class="text-end text-danger small">- R$ {{ "%.2f"|format(p.taxa_parcela) }}</td>
+            <td class="text-end fw-semibold text-success">R$ {{ "%.2f"|format(p.valor_liquido_parcela) }}</td>
+            <td>
+              {% if p.status == 'pendente' %}
+                <span class="badge bg-warning text-dark">Pendente</span>
+              {% elif p.status == 'recebido' %}
+                <span class="badge bg-success">Recebido</span>
+              {% else %}
+                <span class="badge bg-secondary">Cancelado</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if p.status == 'pendente' %}
+              <button class="btn btn-sm btn-success"
+                onclick="abrirModalReceberParcela({{ p.id }}, {{ p.valor_liquido_parcela }})"
+                title="Dar baixa">
+                <i class="bi bi-check-lg"></i>
+              </button>
+              {% elif p.data_recebimento %}
+              <span class="text-muted small">{{ p.data_recebimento.strftime('%d/%m/%Y') }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Modal baixa -->
+<div class="modal fade" id="modalReceber" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title"><i class="bi bi-check2-circle me-2"></i>Dar baixa</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3" id="modalPacienteNome"></p>
+        <div class="mb-3">
+          <label class="form-label">Valor recebido (R$)</label>
+          <input type="number" id="mValor" class="form-control" step="0.01" min="0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Forma de pagamento</label>
+          <select id="mForma" class="form-select">
+            <option value="dinheiro">Dinheiro</option>
+            <option value="pix">Pix</option>
+            <option value="cartao">Cartão (já registrado)</option>
+            <option value="convenio">Convênio</option>
+            <option value="cheque">Cheque</option>
+          </select>
+        </div>
+        <div class="mb-3" id="divContaBancaria">
+          <label class="form-label">Conta bancária</label>
+          <select id="mContaId" class="form-select">
+            <option value="">— selecione —</option>
+          </select>
+          <div class="form-text" id="mContaHelp">Lançamento criado automaticamente no extrato.</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Data de recebimento</label>
+          <input type="date" id="mData" class="form-control" value="{{ hoje }}">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-success btn-sm" onclick="confirmarBaixa()">
+          <i class="bi bi-check-lg me-1"></i>Confirmar recebimento
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let crIdAtual = null;
+
+// Carrega contas bancárias no select do modal
+fetch('/api/contas-bancarias').then(r => r.json()).then(contas => {
+  const sel = document.getElementById('mContaId');
+  contas.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.nome + (c.banco ? ' — ' + c.banco : '');
+    sel.appendChild(opt);
+  });
+});
+
+document.getElementById('mForma').addEventListener('change', function () {
+  const cartao = this.value === 'cartao';
+  document.getElementById('divContaBancaria').style.display = cartao ? 'none' : '';
+  document.getElementById('mContaHelp').textContent = cartao
+    ? ''
+    : 'Lançamento criado automaticamente no extrato.';
+});
+
+function abrirModalReceber(id, paciente, valor) {
+  crIdAtual = id;
+  document.getElementById('modalPacienteNome').textContent = paciente;
+  document.getElementById('mValor').value = parseFloat(valor).toFixed(2);
+  document.getElementById('mForma').value = 'dinheiro';
+  document.getElementById('divContaBancaria').style.display = '';
+  document.getElementById('mData').value = '{{ hoje }}';
+  new bootstrap.Modal(document.getElementById('modalReceber')).show();
+}
+
+async function confirmarBaixa() {
+  if (!crIdAtual) return;
+  const contaId = document.getElementById('mContaId').value;
+  if (!contaId && document.getElementById('mForma').value !== 'cartao') {
+    showToast('Selecione a conta bancária', 'warning'); return;
+  }
+  const res = await apiPost(`/contas-receber/${crIdAtual}/receber`, {
+    data_recebimento: document.getElementById('mData').value,
+    forma_pagamento: document.getElementById('mForma').value,
+    conta_id: contaId,
+    valor: parseFloat(document.getElementById('mValor').value),
+  });
+  if (res.ok) {
+    showToast('Recebimento confirmado!');
+    bootstrap.Modal.getInstance(document.getElementById('modalReceber')).hide();
+    setTimeout(() => location.reload(), 700);
+  } else {
+    showToast(res.erro || 'Erro ao baixar', 'danger');
+  }
+}
+
+async function cancelarCR(id, btn) {
+  if (!confirm('Cancelar esta conta a receber?')) return;
+  const res = await apiPost(`/contas-receber/${id}/cancelar`, {});
+  if (res.ok) { showToast('Cancelado.'); setTimeout(() => location.reload(), 700); }
+  else showToast(res.erro, 'danger');
+}
+
+async function atualizarValor(id, valor) {
+  const res = await apiPost(`/contas-receber/${id}/atualizar-valor`, { valor: parseFloat(valor) });
+  if (res.ok) showToast('Valor atualizado.');
+  else showToast(res.erro, 'danger');
+}
+
+// Baixa de parcela de cartão
+let parcelaIdAtual = null;
+function abrirModalReceberParcela(id, valor) {
+  parcelaIdAtual = id;
+  document.getElementById('modalPacienteNome').textContent = 'Parcela de cartão';
+  document.getElementById('mValor').value = parseFloat(valor).toFixed(2);
+  document.getElementById('mForma').value = 'cartao';
+  document.getElementById('divContaBancaria').style.display = '';
+  document.getElementById('mData').value = '{{ hoje }}';
+  // sobrescreve confirmar para parcela
+  document.querySelector('#modalReceber .btn-success').onclick = confirmarBaixaParcela;
+  new bootstrap.Modal(document.getElementById('modalReceber')).show();
+}
+
+async function confirmarBaixaParcela() {
+  if (!parcelaIdAtual) return;
+  const contaId = document.getElementById('mContaId').value;
+  if (!contaId) { showToast('Selecione a conta bancária', 'warning'); return; }
+  const res = await apiPost(`/cartao/parcela/${parcelaIdAtual}/receber`, {
+    data_recebimento: document.getElementById('mData').value,
+    conta_id: contaId,
+  });
+  if (res.ok) {
+    showToast('Parcela recebida!');
+    bootstrap.Modal.getInstance(document.getElementById('modalReceber')).hide();
+    setTimeout(() => location.reload(), 700);
+  } else {
+    showToast(res.erro || 'Erro', 'danger');
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+# Banco de dados local (nao subir)
+*.db
+*.sqlite
+*.sqlite3
+# Ambientes virtuais
+venv/
+.env
+.venv/
+# Streamlit secrets (nao subir credenciais!)
+.streamlit/secrets.toml
+# Claude/IDE
+.claude/
+.vite/
+# Imagens geradas
+qrcode_*.png
+# Node
+node_modules/
+# Arquivos temporarios
+migracao_supabase.sql
+parking-system/
+wifi_instagram_gate.html
+wifi_ortopedia_haruki.html
+sistema_financeiro.html
+app.py.py

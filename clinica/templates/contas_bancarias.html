@@ -1,0 +1,234 @@
+{% extends 'base.html' %}
+{% block title %}Contas Bancárias{% endblock %}
+{% block page_title %}Contas Bancárias{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-primary btn-sm" onclick="abrirModal()">
+  <i class="bi bi-plus-lg"></i> Nova Conta
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="row g-3 mb-4">
+  {% for c in contas %}
+  <div class="col-sm-6 col-xl-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <div class="fw-semibold">{{ c.nome }}</div>
+            <div class="text-muted small">
+              {{ c.banco }}{% if c.agencia %} · Ag {{ c.agencia }}{% endif %}{% if c.numero %} · Cc {{ c.numero }}{% endif %}
+            </div>
+          </div>
+          <span class="badge {{ 'bg-light text-dark border' if c.ativa else 'bg-secondary' }} small">
+            {{ {'corrente':'Corrente','poupanca':'Poupança','investimento':'Investimento','caixa':'Caixa'}.get(c.tipo, c.tipo) }}
+          </span>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-end mt-3">
+          <div>
+            <div class="text-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.5px">Saldo atual</div>
+            <div class="fs-4 fw-bold {{ 'text-success' if c.saldo_atual >= 0 else 'text-danger' }}">
+              R$ {{ "%.2f"|format(c.saldo_atual) }}
+            </div>
+            <div class="text-muted" style="font-size:.72rem">
+              Saldo inicial: R$ {{ "%.2f"|format(c.saldo_inicial) }}
+            </div>
+          </div>
+          <div class="d-flex gap-1">
+            <a href="{{ url_for('financeiro.extratos') }}?conta_id={{ c.id }}" class="btn btn-sm btn-light" title="Ver extrato">
+              <i class="bi bi-list-ul"></i>
+            </a>
+            <button class="btn btn-sm btn-light" onclick="editarConta({{ c.id }})" title="Editar">
+              <i class="bi bi-pencil"></i>
+            </button>
+            <button class="btn btn-sm btn-light" onclick="ajustarSaldo({{ c.id }}, {{ c.saldo_inicial }})" title="Ajustar saldo inicial">
+              <i class="bi bi-sliders"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12 text-center text-muted py-5">Nenhuma conta cadastrada.</div>
+  {% endfor %}
+</div>
+
+<!-- Resumo total -->
+{% if contas %}
+<div class="card">
+  <div class="card-body">
+    <div class="row text-center">
+      <div class="col">
+        <div class="text-muted small">Total em caixa/bancos</div>
+        <div class="fs-3 fw-bold {{ 'text-success' if contas|sum(attribute='saldo_atual') >= 0 else 'text-danger' }}">
+          R$ {{ "%.2f"|format(contas|sum(attribute='saldo_atual')) }}
+        </div>
+      </div>
+      <div class="col border-start">
+        <div class="text-muted small">Contas ativas</div>
+        <div class="fs-3 fw-bold">{{ contas|selectattr('ativa')|list|length }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Modal nova/editar conta -->
+<div class="modal fade" id="modalConta" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalContaTitulo">Nova Conta Bancária</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="cId">
+        <div class="row g-3">
+          <div class="col-md-8">
+            <label class="form-label">Nome da conta *</label>
+            <input type="text" id="cNome" class="form-control" placeholder="Ex: Bradesco Principal">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Tipo</label>
+            <select id="cTipo" class="form-select">
+              <option value="corrente">Corrente</option>
+              <option value="poupanca">Poupança</option>
+              <option value="investimento">Investimento</option>
+              <option value="caixa">Caixa</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Banco</label>
+            <input type="text" id="cBanco" class="form-control" list="listaBancos">
+            <datalist id="listaBancos">
+              <option value="Bradesco"><option value="Itaú"><option value="Santander">
+              <option value="Banco do Brasil"><option value="Caixa Econômica Federal">
+              <option value="Nubank"><option value="XP Investimentos"><option value="Inter">
+              <option value="Sicoob"><option value="Interno">
+            </datalist>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Agência</label>
+            <input type="text" id="cAgencia" class="form-control" placeholder="0001">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Conta</label>
+            <input type="text" id="cNumero" class="form-control" placeholder="12345-6">
+          </div>
+          <div class="col-md-6" id="divSaldoInicial">
+            <label class="form-label">Saldo inicial (R$)</label>
+            <input type="number" id="cSaldoInicial" class="form-control" step="0.01" value="0">
+            <div class="form-text">Saldo da conta antes de começar a usar o sistema.</div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Status</label>
+            <div class="form-check mt-2">
+              <input class="form-check-input" type="checkbox" id="cAtiva" checked>
+              <label class="form-check-label" for="cAtiva">Conta ativa</label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="salvarConta()">
+          <i class="bi bi-save me-1"></i>Salvar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal ajuste de saldo -->
+<div class="modal fade" id="modalSaldo" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title">Ajustar Saldo Inicial</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">Saldo inicial (R$)</label>
+        <input type="number" id="sSaldo" class="form-control" step="0.01">
+        <div class="form-text">O saldo atual é recalculado automaticamente somando todos os lançamentos.</div>
+        <input type="hidden" id="sContaId">
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="confirmarSaldo()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function abrirModal() {
+  document.getElementById('cId').value = '';
+  document.getElementById('cNome').value = '';
+  document.getElementById('cBanco').value = '';
+  document.getElementById('cAgencia').value = '';
+  document.getElementById('cNumero').value = '';
+  document.getElementById('cTipo').value = 'corrente';
+  document.getElementById('cSaldoInicial').value = '0';
+  document.getElementById('cAtiva').checked = true;
+  document.getElementById('divSaldoInicial').style.display = '';
+  document.getElementById('modalContaTitulo').textContent = 'Nova Conta Bancária';
+  new bootstrap.Modal(document.getElementById('modalConta')).show();
+}
+
+async function editarConta(id) {
+  const res = await fetch('/api/contas-bancarias?todas=1');
+  const contas = await res.json();
+  const c = contas.find(x => x.id === id);
+  if (!c) { showToast('Conta não encontrada', 'danger'); return; }
+  document.getElementById('cId').value = c.id;
+  document.getElementById('cNome').value = c.nome;
+  document.getElementById('cBanco').value = c.banco || '';
+  document.getElementById('cAgencia').value = c.agencia || '';
+  document.getElementById('cNumero').value = c.numero || '';
+  document.getElementById('cTipo').value = c.tipo;
+  document.getElementById('cAtiva').checked = c.ativa;
+  document.getElementById('divSaldoInicial').style.display = 'none';
+  document.getElementById('modalContaTitulo').textContent = 'Editar Conta';
+  new bootstrap.Modal(document.getElementById('modalConta')).show();
+}
+
+async function salvarConta() {
+  const nome = document.getElementById('cNome').value;
+  if (!nome) { showToast('Informe o nome da conta', 'warning'); return; }
+  const res = await apiPost('/contas-bancarias/salvar', {
+    id: document.getElementById('cId').value || null,
+    nome,
+    banco: document.getElementById('cBanco').value,
+    agencia: document.getElementById('cAgencia').value,
+    numero: document.getElementById('cNumero').value,
+    tipo: document.getElementById('cTipo').value,
+    ativa: document.getElementById('cAtiva').checked,
+    saldo_inicial: parseFloat(document.getElementById('cSaldoInicial').value) || 0,
+  });
+  if (res.ok) { showToast('Conta salva!'); setTimeout(() => location.reload(), 700); }
+  else showToast(res.erro, 'danger');
+}
+
+function ajustarSaldo(id, atual) {
+  document.getElementById('sContaId').value = id;
+  document.getElementById('sSaldo').value = parseFloat(atual).toFixed(2);
+  new bootstrap.Modal(document.getElementById('modalSaldo')).show();
+}
+
+async function confirmarSaldo() {
+  const id = document.getElementById('sContaId').value;
+  const saldo = parseFloat(document.getElementById('sSaldo').value);
+  const res = await apiPost(`/contas-bancarias/${id}/saldo-inicial`, { saldo_inicial: saldo });
+  if (res.ok) {
+    showToast(`Saldo atualizado. Saldo atual: R$ ${parseFloat(res.saldo_atual).toFixed(2).replace('.',',')}`);
+    setTimeout(() => location.reload(), 800);
+  } else showToast(res.erro, 'danger');
+}
+</script>
+{% endblock %}

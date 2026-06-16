@@ -1,0 +1,391 @@
+{% extends 'base.html' %}
+{% block title %}Pagamentos em Cartão{% endblock %}
+{% block page_title %}Pagamentos em Cartão{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('cartao.taxas') }}" class="btn btn-outline-secondary btn-sm">
+  <i class="bi bi-sliders"></i> Taxas
+</a>
+<a href="{{ url_for('cartao.parcelas') }}" class="btn btn-outline-secondary btn-sm">
+  <i class="bi bi-calendar-check"></i> Recebíveis
+</a>
+<button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalNovoPgto">
+  <i class="bi bi-plus-lg"></i> Registrar Pagamento
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#1a6fc4,#2d8fd8)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(bruto_mes) }}</div>
+          <div class="kpi-label">Bruto recebido no mês</div>
+        </div>
+        <i class="bi bi-credit-card kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(taxas_mes) }}</div>
+          <div class="kpi-label">Taxas descontadas no mês</div>
+        </div>
+        <i class="bi bi-percent kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#16a34a,#22c55e)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(liquido_mes) }}</div>
+          <div class="kpi-label">Líquido no mês</div>
+        </div>
+        <i class="bi bi-wallet2 kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#0e7490,#06b6d4)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(receber_30d) }}</div>
+          <div class="kpi-label">A receber — próx. 30 dias</div>
+        </div>
+        <i class="bi bi-clock kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Bandeira</label>
+        <select name="bandeira" class="form-select form-select-sm">
+          <option value="">Todas</option>
+          {% for b in bandeiras %}<option value="{{ b }}" {{ 'selected' if filtros.bandeira == b }}>{{ b }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          <option value="ativo" {{ 'selected' if filtros.status == 'ativo' }}>Ativo</option>
+          <option value="cancelado" {{ 'selected' if filtros.status == 'cancelado' }}>Cancelado</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">De</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Tabela -->
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Data</th><th>Paciente</th><th>Bandeira</th><th>Tipo</th>
+            <th class="text-center">Parcelas</th>
+            <th class="text-end">Bruto</th>
+            <th class="text-end text-danger">Taxa</th>
+            <th class="text-end text-success">Líquido</th>
+            <th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in pagamentos.items %}
+          <tr class="{{ 'text-muted' if p.status == 'cancelado' }}">
+            <td>{{ p.data_venda.strftime('%d/%m/%Y') }}</td>
+            <td>{{ p.paciente }}</td>
+            <td>
+              <span class="badge" style="background:{{ {'Visa':'#1a1f71','Mastercard':'#eb001b','Elo':'#ffcb05;color:#000','Amex':'#016fd0','Hipercard':'#8b0000'}.get(p.bandeira,'#6b7280') }}">
+                {{ p.bandeira }}
+              </span>
+            </td>
+            <td>{{ {'debito':'Débito','credito':'Crédito'}.get(p.tipo, p.tipo) }}</td>
+            <td class="text-center">
+              {% set recebidas = p.parcelas|selectattr('status','eq','recebido')|list|length %}
+              <span class="badge {{ 'bg-success' if recebidas == p.num_parcelas else 'bg-primary' }}">
+                {{ recebidas }}/{{ p.num_parcelas }}
+              </span>
+            </td>
+            <td class="text-end">R$ {{ "%.2f"|format(p.valor_bruto) }}</td>
+            <td class="text-end text-danger">- R$ {{ "%.2f"|format(p.valor_taxa) }} <small class="text-muted">({{ "%.2f"|format(p.taxa_percentual) }}%)</small></td>
+            <td class="text-end fw-semibold text-success">R$ {{ "%.2f"|format(p.valor_liquido) }}</td>
+            <td>
+              <span class="badge {{ 'bg-success' if p.status == 'ativo' else 'bg-secondary' }}">
+                {{ p.status }}
+              </span>
+            </td>
+            <td>
+              <div class="d-flex gap-1">
+                <button class="btn btn-sm btn-light" onclick="verParcelas({{ p.id }})" title="Ver parcelas">
+                  <i class="bi bi-list-ol"></i>
+                </button>
+                {% if p.status == 'ativo' %}
+                <button class="btn btn-sm btn-light text-danger" onclick="cancelarPgto({{ p.id }}, this)" title="Cancelar">
+                  <i class="bi bi-x-circle"></i>
+                </button>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="10" class="text-center py-4 text-muted">Nenhum pagamento registrado</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if pagamentos.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ pagamentos.total }} registros</small>
+    <nav><ul class="pagination pagination-sm mb-0">
+      {% if pagamentos.has_prev %}<li class="page-item"><a class="page-link" href="?page={{ pagamentos.prev_num }}">‹</a></li>{% endif %}
+      <li class="page-item active"><a class="page-link" href="#">{{ pagamentos.page }}/{{ pagamentos.pages }}</a></li>
+      {% if pagamentos.has_next %}<li class="page-item"><a class="page-link" href="?page={{ pagamentos.next_num }}">›</a></li>{% endif %}
+    </ul></nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- ── MODAL NOVO PAGAMENTO ─────────────────────────────────────────────── -->
+<div class="modal fade" id="modalNovoPgto" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-credit-card me-2"></i>Registrar Pagamento em Cartão</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Paciente *</label>
+            <input type="text" id="nPaciente" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Descrição</label>
+            <input type="text" id="nDesc" class="form-control" placeholder="Ex: Consulta + exame">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Bandeira *</label>
+            <select id="nBandeira" class="form-select" onchange="simular()">
+              <option value="">Selecione</option>
+              {% for b in bandeiras %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Tipo *</label>
+            <select id="nTipo" class="form-select" onchange="toggleParcelas(); simular()">
+              <option value="credito">Crédito</option>
+              <option value="debito">Débito</option>
+            </select>
+          </div>
+          <div class="col-md-4" id="divParcelas">
+            <label class="form-label">Número de parcelas</label>
+            <select id="nParcelas" class="form-select" onchange="simular()">
+              {% for i in range(1, 13) %}<option value="{{ i }}">{{ i }}x</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Valor bruto (R$) *</label>
+            <input type="number" id="nValor" class="form-control" step="0.01" min="0.01" oninput="simular()">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Data da venda *</label>
+            <input type="date" id="nDataVenda" class="form-control" value="{{ hoje }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Agendamento (ID)</label>
+            <input type="number" id="nAgendamento" class="form-control" placeholder="Opcional">
+          </div>
+        </div>
+
+        <!-- Simulação -->
+        <div id="divSimulacao" class="mt-4" style="display:none">
+          <hr>
+          <h6 class="text-muted mb-3"><i class="bi bi-calculator me-1"></i>Simulação de parcelas</h6>
+          <div class="row g-3 mb-3">
+            <div class="col-4">
+              <div class="text-center p-3 rounded" style="background:#f0f4f8">
+                <div class="text-muted small">Valor bruto</div>
+                <div class="fw-bold fs-5" id="simBruto">—</div>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="text-center p-3 rounded" style="background:#fee2e2">
+                <div class="text-danger small">Taxa (<span id="simTaxaPct">—</span>%)</div>
+                <div class="fw-bold fs-5 text-danger" id="simTaxaR">—</div>
+              </div>
+            </div>
+            <div class="col-4">
+              <div class="text-center p-3 rounded" style="background:#dcfce7">
+                <div class="text-success small">Líquido a receber</div>
+                <div class="fw-bold fs-5 text-success" id="simLiquido">—</div>
+              </div>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-bordered mb-0">
+              <thead class="table-light">
+                <tr><th>Parcela</th><th class="text-end">Bruto</th><th class="text-end text-danger">Taxa</th><th class="text-end text-success">Líquido</th><th>Previsão recebimento</th></tr>
+              </thead>
+              <tbody id="tabelaSimulacao"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="erroSimulacao" class="mt-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" id="btnConfirmar" onclick="confirmarPagamento()" disabled>
+          <i class="bi bi-check-lg me-1"></i>Confirmar e provisionar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL PARCELAS DO PAGAMENTO ──────────────────────────────────────── -->
+<div class="modal fade" id="modalParcelas" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-list-ol me-2"></i>Parcelas do Pagamento</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="conteudoParcelas"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let ultimaSimulacao = null;
+
+function toggleParcelas() {
+  const debito = document.getElementById('nTipo').value === 'debito';
+  document.getElementById('divParcelas').style.display = debito ? 'none' : '';
+  if (debito) document.getElementById('nParcelas').value = 1;
+}
+
+async function simular() {
+  const bandeira = document.getElementById('nBandeira').value;
+  const tipo = document.getElementById('nTipo').value;
+  const parcelas = parseInt(document.getElementById('nParcelas').value);
+  const valor = parseFloat(document.getElementById('nValor').value);
+  const dataVenda = document.getElementById('nDataVenda').value;
+
+  const err = document.getElementById('erroSimulacao');
+  err.innerHTML = '';
+  document.getElementById('divSimulacao').style.display = 'none';
+  document.getElementById('btnConfirmar').disabled = true;
+  ultimaSimulacao = null;
+
+  if (!bandeira || !valor || valor <= 0 || !dataVenda) return;
+
+  const res = await apiPost('/cartao/simular', {
+    bandeira, tipo, num_parcelas: parcelas, valor_bruto: valor, data_venda: dataVenda
+  });
+
+  if (!res.ok) {
+    err.innerHTML = `<div class="alert alert-warning small">${res.erro}</div>`;
+    return;
+  }
+
+  ultimaSimulacao = res;
+
+  document.getElementById('simBruto').textContent = 'R$ ' + valor.toFixed(2).replace('.', ',');
+  document.getElementById('simTaxaPct').textContent = res.taxa_percentual.toFixed(2).replace('.', ',');
+  document.getElementById('simTaxaR').textContent = 'R$ ' + res.total_taxa.toFixed(2).replace('.', ',');
+  document.getElementById('simLiquido').textContent = 'R$ ' + res.total_liquido.toFixed(2).replace('.', ',');
+
+  const tbody = document.getElementById('tabelaSimulacao');
+  tbody.innerHTML = res.parcelas.map(p => `
+    <tr>
+      <td>${p.numero}/${res.parcelas.length}</td>
+      <td class="text-end">R$ ${p.valor_bruto_parcela.toFixed(2).replace('.',',')}</td>
+      <td class="text-end text-danger">- R$ ${p.taxa_parcela.toFixed(2).replace('.',',')}</td>
+      <td class="text-end text-success fw-semibold">R$ ${p.valor_liquido_parcela.toFixed(2).replace('.',',')}</td>
+      <td>${p.data_prevista}</td>
+    </tr>`).join('');
+
+  document.getElementById('divSimulacao').style.display = '';
+  document.getElementById('btnConfirmar').disabled = false;
+}
+
+async function confirmarPagamento() {
+  if (!ultimaSimulacao) return;
+  const btn = document.getElementById('btnConfirmar');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Salvando...';
+
+  const res = await apiPost('/cartao/registrar', {
+    paciente: document.getElementById('nPaciente').value,
+    descricao: document.getElementById('nDesc').value,
+    bandeira: document.getElementById('nBandeira').value,
+    tipo: document.getElementById('nTipo').value,
+    num_parcelas: parseInt(document.getElementById('nParcelas').value),
+    valor_bruto: parseFloat(document.getElementById('nValor').value),
+    data_venda: document.getElementById('nDataVenda').value,
+    agendamento_id: document.getElementById('nAgendamento').value || null,
+  });
+
+  if (res.ok) {
+    showToast(`✓ Pagamento registrado — ${res.num_parcelas}x provisionadas | Líquido: R$ ${res.valor_liquido.toFixed(2).replace('.',',')} | Taxa: R$ ${res.valor_taxa.toFixed(2).replace('.',',')}`);
+    bootstrap.Modal.getInstance(document.getElementById('modalNovoPgto')).hide();
+    setTimeout(() => location.reload(), 1000);
+  } else {
+    showToast(res.erro, 'danger');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Confirmar e provisionar';
+  }
+}
+
+async function verParcelas(id) {
+  const r = await fetch(`/cartao/parcelas?pagamento_id=${id}`);
+  // Usa endpoint de listagem filtrado — ou exibe inline via API
+  const div = document.getElementById('conteudoParcelas');
+  div.innerHTML = '<div class="p-4 text-center text-muted">Carregando...</div>';
+  new bootstrap.Modal(document.getElementById('modalParcelas')).show();
+
+  // Busca direto no backend via redirect para a página de parcelas filtrada
+  div.innerHTML = `<iframe src="/cartao/parcelas?pagamento_id_modal=${id}&embed=1"
+    style="width:100%;min-height:400px;border:none"></iframe>`;
+}
+
+async function cancelarPgto(id, btn) {
+  if (!confirm('Cancelar este pagamento? As parcelas pendentes também serão canceladas.')) return;
+  const res = await apiPost(`/cartao/${id}/cancelar`, {});
+  if (res.ok) { showToast('Pagamento cancelado'); setTimeout(() => location.reload(), 700); }
+  else showToast(res.erro, 'danger');
+}
+
+// Atualizar simulação quando data mudar
+document.getElementById('nDataVenda').addEventListener('change', simular);
+</script>
+{% endblock %}

@@ -1,0 +1,212 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard — {{ mes_nome }}{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('agendamentos.novo') }}" class="btn btn-primary btn-sm">
+  <i class="bi bi-plus-lg"></i> Novo Agendamento
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#1a6fc4,#2d8fd8)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">{{ total_consultas }}</div>
+          <div class="kpi-label">Consultas no mês</div>
+        </div>
+        <i class="bi bi-calendar3 kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#16a34a,#22c55e)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">{{ realizadas }}</div>
+          <div class="kpi-label">Realizadas</div>
+        </div>
+        <i class="bi bi-check2-circle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">{{ faltas }} <small style="font-size:1rem">({{ taxa_falta }}%)</small></div>
+          <div class="kpi-label">Faltas</div>
+        </div>
+        <i class="bi bi-person-x kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-xl-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#0e7490,#06b6d4)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(receita_mes) }}</div>
+          <div class="kpi-label">Receita do mês</div>
+        </div>
+        <i class="bi bi-currency-dollar kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Alertas -->
+{% if contas_vencidas > 0 %}
+<div class="alert alert-danger d-flex align-items-center gap-2 mb-3">
+  <i class="bi bi-exclamation-triangle-fill"></i>
+  <span><strong>{{ contas_vencidas }} conta(s) vencida(s)</strong> — <a href="{{ url_for('financeiro.contas_pagar') }}?status=vencido" class="alert-link">Ver contas a pagar</a></span>
+</div>
+{% endif %}
+{% if contas_vencer > 0 %}
+<div class="alert alert-warning d-flex align-items-center gap-2 mb-3">
+  <i class="bi bi-clock-fill"></i>
+  <span><strong>{{ contas_vencer }} conta(s)</strong> vencem nos próximos 7 dias — <a href="{{ url_for('financeiro.contas_pagar') }}" class="alert-link">Ver contas</a></span>
+</div>
+{% endif %}
+
+<div class="row g-3 mb-4">
+  <!-- Gráfico Consultas -->
+  <div class="col-xl-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        Consultas por mês
+        <select class="form-select form-select-sm w-auto" id="anoGrafico" onchange="carregarGraficos()">
+          {% for a in range(hoje.year, hoje.year - 3, -1) %}
+          <option value="{{ a }}" {{ 'selected' if a == hoje.year }}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="card-body">
+        <canvas id="graficoConsultas" height="110"></canvas>
+      </div>
+    </div>
+  </div>
+  <!-- Gráfico Convênios -->
+  <div class="col-xl-4">
+    <div class="card h-100">
+      <div class="card-header">Convênios — mês atual</div>
+      <div class="card-body d-flex align-items-center justify-content-center">
+        <canvas id="graficoConvenios" style="max-height:220px"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agenda do dia -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-calendar-day me-2"></i>Agenda de hoje — {{ hoje.strftime('%d/%m/%Y') }}</span>
+    <span class="badge bg-primary">{{ agendamentos_hoje|length }} agendamento(s)</span>
+  </div>
+  <div class="card-body p-0">
+    {% if agendamentos_hoje %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr>
+            <th>Hora</th><th>Paciente</th><th>Médico</th><th>Convênio</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for ag in agendamentos_hoje %}
+          <tr>
+            <td><strong>{{ ag.data_hora.strftime('%H:%M') }}</strong></td>
+            <td>{{ ag.paciente }}</td>
+            <td>{{ ag.medico or '—' }}</td>
+            <td>{{ ag.convenio or 'Particular' }}</td>
+            <td>
+              <span class="badge badge-{{ ag.status }}">
+                {{ {'agendado':'Agendado','confirmado':'Confirmado','realizado':'Realizado','falta':'Falta','cancelado':'Cancelado'}.get(ag.status, ag.status) }}
+              </span>
+            </td>
+            <td>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-light" data-bs-toggle="dropdown"><i class="bi bi-three-dots"></i></button>
+                <ul class="dropdown-menu">
+                  {% for s, l in [('realizado','Realizado'),('falta','Falta'),('cancelado','Cancelado')] %}
+                  <li><a class="dropdown-item" onclick="alterarStatus({{ ag.id }}, '{{ s }}', this)">
+                    Marcar como {{ l }}
+                  </a></li>
+                  {% endfor %}
+                </ul>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="bi bi-calendar-x" style="font-size:2.5rem"></i>
+      <p class="mt-2 mb-0">Nenhum agendamento para hoje</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MESES = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+let chartConsultas, chartConvenios;
+
+async function carregarGraficos() {
+  const ano = document.getElementById('anoGrafico').value;
+
+  const [dadosC, dadosConv] = await Promise.all([
+    fetch(`/api/grafico-consultas?ano=${ano}`).then(r => r.json()),
+    fetch(`/api/grafico-convenios`).then(r => r.json()),
+  ]);
+
+  // Gráfico consultas
+  const ctxC = document.getElementById('graficoConsultas').getContext('2d');
+  if (chartConsultas) chartConsultas.destroy();
+  chartConsultas = new Chart(ctxC, {
+    type: 'bar',
+    data: {
+      labels: MESES,
+      datasets: [
+        { label: 'Realizadas', data: dadosC.map(d => d.realizadas), backgroundColor: '#22c55e' },
+        { label: 'Faltas', data: dadosC.map(d => d.faltas), backgroundColor: '#f87171' },
+        { label: 'Agendadas', data: dadosC.map(d => d.total - d.realizadas - d.faltas), backgroundColor: '#93c5fd' },
+      ]
+    },
+    options: { responsive: true, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } } }
+  });
+
+  // Gráfico convênios
+  const ctxCv = document.getElementById('graficoConvenios').getContext('2d');
+  if (chartConvenios) chartConvenios.destroy();
+  if (dadosConv.length > 0) {
+    chartConvenios = new Chart(ctxCv, {
+      type: 'doughnut',
+      data: {
+        labels: dadosConv.map(d => d.convenio),
+        datasets: [{ data: dadosConv.map(d => d.total), backgroundColor: ['#1a6fc4','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4'] }]
+      },
+      options: { responsive: true, plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } } }
+    });
+  } else {
+    ctxCv.canvas.parentElement.innerHTML = '<p class="text-muted text-center py-4">Sem dados</p>';
+  }
+}
+
+async function alterarStatus(id, status, el) {
+  const res = await apiPost(`/agendamentos/${id}/status`, { status });
+  if (res.ok) {
+    showToast('Status atualizado!');
+    setTimeout(() => location.reload(), 800);
+  }
+}
+
+carregarGraficos();
+</script>
+{% endblock %}

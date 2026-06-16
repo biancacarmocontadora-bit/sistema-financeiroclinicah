@@ -1,0 +1,178 @@
+{% extends 'base.html' %}
+{% block title %}Conciliação Bancária{% endblock %}
+{% block page_title %}Conciliação Bancária{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <!-- Lançamentos não conciliados -->
+  <div class="col-xl-7">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-check me-2"></i>Lançamentos pendentes de conciliação</span>
+        <span class="badge bg-warning text-dark">{{ lancamentos|length }}</span>
+      </div>
+      <div class="card-body p-0">
+        {% if lancamentos %}
+        <div class="table-responsive" style="max-height:480px;overflow-y:auto">
+          <table class="table table-hover mb-0">
+            <thead style="position:sticky;top:0;z-index:1">
+              <tr>
+                <th><input type="checkbox" id="checkAllLanc"></th>
+                <th>Data</th><th>Conta</th><th>Descrição</th><th>Tipo</th><th class="text-end">Valor</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for l in lancamentos %}
+              <tr>
+                <td><input type="checkbox" class="chk-lanc" value="{{ l.id }}" data-valor="{{ l.valor }}"></td>
+                <td>{{ l.data.strftime('%d/%m/%Y') }}</td>
+                <td>{{ l.conta }}</td>
+                <td>{{ l.descricao }}</td>
+                <td><span class="badge {{ 'bg-success' if l.tipo == 'credito' else 'bg-danger' }}">{{ 'Crd' if l.tipo == 'credito' else 'Dbt' }}</span></td>
+                <td class="text-end fw-semibold {{ 'text-success' if l.valor >= 0 else 'text-danger' }}">R$ {{ "%.2f"|format(l.valor|abs) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="p-3 border-top d-flex justify-content-between align-items-center">
+          <div>
+            <span class="text-muted small">Selecionados: </span>
+            <strong id="totalSelecionado">R$ 0,00</strong>
+          </div>
+          <button class="btn btn-success btn-sm" onclick="conciliarSelecionados()">
+            <i class="bi bi-check2-square me-1"></i>Conciliar selecionados
+          </button>
+        </div>
+        {% else %}
+        <div class="text-center py-5 text-muted">
+          <i class="bi bi-check-circle" style="font-size:2.5rem;color:#22c55e"></i>
+          <p class="mt-2">Todos os lançamentos estão conciliados!</p>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Histórico de conciliações -->
+  <div class="col-xl-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-clock-history me-2"></i>Histórico de conciliações</div>
+      <div class="card-body p-0">
+        {% if conciliacoes %}
+        <div class="list-group list-group-flush" style="max-height:540px;overflow-y:auto">
+          {% for c in conciliacoes %}
+          <div class="list-group-item">
+            <div class="d-flex justify-content-between">
+              <div>
+                <div class="fw-semibold small">{{ c.descricao }}</div>
+                <div class="text-muted" style="font-size:0.75rem">{{ c.data.strftime('%d/%m/%Y') if c.data else '' }} · {{ c.lancamentos|length }} lançamentos</div>
+              </div>
+              <div class="text-end">
+                <div class="fw-semibold {{ 'text-success' if c.valor_banco >= 0 else 'text-danger' }}">
+                  R$ {{ "%.2f"|format(c.valor_banco|abs if c.valor_banco else 0) }}
+                </div>
+                <span class="badge {{ 'bg-success' if c.status == 'conciliado' else 'bg-warning text-dark' }}">{{ c.status }}</span>
+              </div>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-4 text-muted small">Nenhuma conciliação realizada</div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Resumo por conta -->
+    <div class="card mt-3">
+      <div class="card-header">Saldo por conta</div>
+      <div class="card-body p-0">
+        {% if contas %}
+        <div class="list-group list-group-flush">
+          {% for conta in contas %}
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <span class="small">{{ conta }}</span>
+            <a href="{{ url_for('financeiro.extratos') }}?conta={{ conta }}" class="btn btn-xs btn-light btn-sm">
+              <i class="bi bi-eye"></i> Ver extrato
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="text-center py-3 text-muted small">Importe extratos primeiro</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal confirmar conciliação -->
+<div class="modal fade" id="modalConfirmConc" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h6 class="modal-title">Confirmar Conciliação</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Descrição (opcional)</label>
+          <input type="text" id="descConc" class="form-control form-control-sm" placeholder="Ex: Fev/2025 Bradesco">
+        </div>
+        <div class="text-center">
+          <div class="text-muted small">Total a conciliar</div>
+          <div class="fs-4 fw-bold" id="totalConfirm">R$ 0,00</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-success btn-sm" onclick="confirmarConciliacao()">
+          <i class="bi bi-check-lg"></i> Confirmar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let idsSelecionados = [];
+
+document.getElementById('checkAllLanc')?.addEventListener('change', function() {
+  document.querySelectorAll('.chk-lanc').forEach(c => c.checked = this.checked);
+  atualizarTotal();
+});
+
+document.querySelectorAll('.chk-lanc').forEach(c => c.addEventListener('change', atualizarTotal));
+
+function atualizarTotal() {
+  let total = 0;
+  idsSelecionados = [];
+  document.querySelectorAll('.chk-lanc:checked').forEach(c => {
+    total += Math.abs(parseFloat(c.dataset.valor));
+    idsSelecionados.push(parseInt(c.value));
+  });
+  document.getElementById('totalSelecionado').textContent = 'R$ ' + total.toFixed(2).replace('.',',');
+}
+
+function conciliarSelecionados() {
+  if (idsSelecionados.length === 0) { showToast('Selecione lançamentos', 'warning'); return; }
+  const total = parseFloat(document.getElementById('totalSelecionado').textContent.replace('R$ ','').replace(',','.'));
+  document.getElementById('totalConfirm').textContent = 'R$ ' + total.toFixed(2).replace('.',',');
+  document.getElementById('descConc').value = '';
+  new bootstrap.Modal(document.getElementById('modalConfirmConc')).show();
+}
+
+async function confirmarConciliacao() {
+  const descricao = document.getElementById('descConc').value || 'Conciliação manual';
+  const res = await apiPost('/conciliacao/conciliar', { ids: idsSelecionados, descricao });
+  if (res.ok) {
+    showToast('Conciliação realizada!');
+    bootstrap.Modal.getInstance(document.getElementById('modalConfirmConc')).hide();
+    setTimeout(() => location.reload(), 800);
+  } else showToast(res.erro, 'danger');
+}
+</script>
+{% endblock %}

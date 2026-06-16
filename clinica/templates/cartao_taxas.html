@@ -1,0 +1,172 @@
+{% extends 'base.html' %}
+{% block title %}Taxas de Cartão{% endblock %}
+{% block page_title %}Configuração de Taxas — Cartão{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('cartao.lista') }}" class="btn btn-outline-secondary btn-sm">
+  <i class="bi bi-arrow-left"></i> Voltar
+</a>
+<button class="btn btn-primary btn-sm" onclick="salvarTodas()">
+  <i class="bi bi-save me-1"></i>Salvar alterações
+</button>
+{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-xl-8">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-percent me-2"></i>Taxas por bandeira e modalidade</span>
+        <small class="text-muted">Edite diretamente na tabela e clique em Salvar</small>
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover mb-0" id="tabelaTaxas">
+            <thead>
+              <tr>
+                <th>Bandeira</th>
+                <th>Modalidade</th>
+                <th style="width:140px">Taxa (%)</th>
+                <th style="width:140px">Dias repasse</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for t in taxas %}
+              <tr data-id="{{ t.id }}">
+                <td>
+                  <span class="badge fw-normal px-2 py-1"
+                    style="background:{{ {'Visa':'#1a1f71','Mastercard':'#eb001b','Elo':'#b8860b','Amex':'#016fd0','Hipercard':'#8b0000'}.get(t.bandeira,'#6b7280') }}; font-size:.8rem">
+                    {{ t.bandeira }}
+                  </span>
+                </td>
+                <td>{{ tipo_label.get(t.tipo, t.tipo) }}</td>
+                <td>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control taxa-input" value="{{ t.taxa_percentual }}"
+                      step="0.01" min="0" max="30" data-id="{{ t.id }}" data-campo="taxa_percentual"
+                      style="max-width:80px">
+                    <span class="input-group-text">%</span>
+                  </div>
+                </td>
+                <td>
+                  <div class="input-group input-group-sm">
+                    <input type="number" class="form-control taxa-input" value="{{ t.dias_repasse }}"
+                      step="1" min="1" max="60" data-id="{{ t.id }}" data-campo="dias_repasse"
+                      style="max-width:70px">
+                    <span class="input-group-text">dias</span>
+                  </div>
+                </td>
+                <td>
+                  <button class="btn btn-sm btn-light text-danger" onclick="excluirTaxa({{ t.id }}, this)" title="Remover">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </td>
+              </tr>
+              {% else %}
+              <tr><td colspan="5" class="text-center py-3 text-muted">Nenhuma taxa configurada</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-xl-4">
+    <!-- Nova taxa -->
+    <div class="card mb-4">
+      <div class="card-header"><i class="bi bi-plus-circle me-2"></i>Adicionar taxa</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Bandeira</label>
+          <select id="nBandeira" class="form-select form-select-sm">
+            {% for b in bandeiras %}<option>{{ b }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Modalidade</label>
+          <select id="nTipo" class="form-select form-select-sm">
+            {% for k, v in tipo_label.items() %}
+            <option value="{{ k }}">{{ v }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Taxa (%)</label>
+          <div class="input-group input-group-sm">
+            <input type="number" id="nTaxa" class="form-control" step="0.01" min="0" placeholder="2.49">
+            <span class="input-group-text">%</span>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Dias para repasse</label>
+          <div class="input-group input-group-sm">
+            <input type="number" id="nDias" class="form-control" value="30" min="1">
+            <span class="input-group-text">dias</span>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-sm w-100" onclick="adicionarTaxa()">
+          <i class="bi bi-plus-lg me-1"></i>Adicionar
+        </button>
+      </div>
+    </div>
+
+    <!-- Explicação -->
+    <div class="card">
+      <div class="card-header"><i class="bi bi-info-circle me-2"></i>Como funciona</div>
+      <div class="card-body small text-muted">
+        <p><strong>Modalidades:</strong></p>
+        <ul class="ps-3 mb-2">
+          <li><strong>Débito</strong> — 1 parcela, repasse em 1 dia útil</li>
+          <li><strong>Crédito 1x</strong> — sem parcelamento</li>
+          <li><strong>Crédito 2–6x</strong> — parcelamento curto</li>
+          <li><strong>Crédito 7–12x</strong> — parcelamento longo</li>
+        </ul>
+        <p><strong>Dias de repasse:</strong> prazo em que cada parcela cai na conta após a data da venda.</p>
+        <p class="mb-0">Para crédito parcelado, o sistema soma automaticamente 30 dias a cada parcela seguinte.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function coletarTaxas() {
+  const dados = [];
+  document.querySelectorAll('#tabelaTaxas tbody tr[data-id]').forEach(tr => {
+    const id = parseInt(tr.dataset.id);
+    const taxa = parseFloat(tr.querySelector('[data-campo="taxa_percentual"]').value);
+    const dias = parseInt(tr.querySelector('[data-campo="dias_repasse"]').value);
+    dados.push({ id, taxa_percentual: taxa, dias_repasse: dias });
+  });
+  return dados;
+}
+
+async function salvarTodas() {
+  const res = await apiPost('/cartao/taxas/salvar', coletarTaxas());
+  if (res.ok) showToast('Taxas salvas com sucesso!');
+  else showToast(res.erro, 'danger');
+}
+
+async function adicionarTaxa() {
+  const bandeira = document.getElementById('nBandeira').value;
+  const tipo = document.getElementById('nTipo').value;
+  const taxa = parseFloat(document.getElementById('nTaxa').value);
+  const dias = parseInt(document.getElementById('nDias').value);
+  if (!bandeira || !tipo || isNaN(taxa)) { showToast('Preencha todos os campos', 'warning'); return; }
+
+  const res = await apiPost('/cartao/taxas/nova', { bandeira, tipo, taxa_percentual: taxa, dias_repasse: dias });
+  if (res.ok) { showToast('Taxa adicionada!'); setTimeout(() => location.reload(), 700); }
+  else showToast(res.erro, 'danger');
+}
+
+async function excluirTaxa(id, btn) {
+  if (!confirm('Remover esta taxa?')) return;
+  // Marca como inativo via edição com taxa 0 — ou remove da tabela visualmente
+  btn.closest('tr').remove();
+  showToast('Taxa removida da lista. Clique em Salvar para confirmar.', 'warning');
+}
+</script>
+{% endblock %}

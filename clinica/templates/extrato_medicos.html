@@ -1,0 +1,273 @@
+{% extends 'base.html' %}
+{% block title %}Extrato por Médico{% endblock %}
+{% block page_title %}Extrato por Médico{% endblock %}
+
+{% block content %}
+<!-- Filtros -->
+<div class="card mb-4">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-4 col-md-2">
+        <label class="form-label form-label-sm mb-1">Mês</label>
+        <select name="mes" class="form-select form-select-sm">
+          {% set meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'] %}
+          {% for i in range(1,13) %}
+          <option value="{{ i }}" {{ 'selected' if filtros.mes == i }}>{{ meses[i-1] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-2">
+        <label class="form-label form-label-sm mb-1">Ano</label>
+        <select name="ano" class="form-select form-select-sm">
+          {% for a in range(hoje.year + 1, hoje.year - 4, -1) %}
+          <option value="{{ a }}" {{ 'selected' if filtros.ano == a }}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-4 col-md-3">
+        <label class="form-label form-label-sm mb-1">Conta bancária</label>
+        <select name="conta_id" class="form-select form-select-sm">
+          <option value="">Todas as contas</option>
+          {% for c in contas_cadastradas %}
+          <option value="{{ c.id }}" {{ 'selected' if filtros.conta_id|string == c.id|string }}>{{ c.nome }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- KPIs totais -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-4">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#16a34a,#22c55e)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.2f"|format(total_receitas) }}</div>
+          <div class="kpi-label">Total de receitas</div>
+        </div>
+        <i class="bi bi-arrow-down-circle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.2f"|format(total_despesas) }}</div>
+          <div class="kpi-label">Total de despesas</div>
+        </div>
+        <i class="bi bi-arrow-up-circle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-4">
+    {% set saldo_total = total_receitas - total_despesas %}
+    <div class="kpi-card" style="background:linear-gradient(135deg,{{ '#0e7490,#06b6d4' if saldo_total >= 0 else '#7c3aed,#a78bfa' }})">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.2f"|format(saldo_total) }}</div>
+          <div class="kpi-label">Resultado líquido</div>
+        </div>
+        <i class="bi bi-graph-up kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Tabela por médico -->
+  <div class="col-xl-7">
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-person-badge me-2"></i>Receitas e despesas por médico</span>
+        <span class="badge bg-primary">{{ medicos|length }} médico(s)</span>
+      </div>
+      <div class="card-body p-0">
+        {% if medicos %}
+        <div class="table-responsive">
+          <table class="table table-hover mb-0">
+            <thead>
+              <tr>
+                <th>Médico</th>
+                <th class="text-end text-success">Receitas</th>
+                <th class="text-center text-muted small">Qtd</th>
+                <th class="text-end text-danger">Despesas</th>
+                <th class="text-end">Líquido</th>
+                <th style="width:120px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in medicos %}
+              <tr>
+                <td class="fw-semibold">{{ m.medico }}</td>
+                <td class="text-end text-success">R$ {{ "%.2f"|format(m.receitas) }}</td>
+                <td class="text-center text-muted small">{{ m.qtd_receitas }}</td>
+                <td class="text-end text-danger">{% if m.despesas %}- R$ {{ "%.2f"|format(m.despesas) }}{% else %}—{% endif %}</td>
+                <td class="text-end fw-bold {{ 'text-success' if m.liquido >= 0 else 'text-danger' }}">
+                  R$ {{ "%.2f"|format(m.liquido) }}
+                </td>
+                <td>
+                  <button class="btn btn-sm btn-light w-100" onclick="verDetalhe('{{ m.medico|e }}')">
+                    <i class="bi bi-zoom-in me-1"></i>Detalhe
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot class="table-light fw-semibold">
+              <tr>
+                <td>Total vinculado a médicos</td>
+                <td class="text-end text-success">R$ {{ "%.2f"|format(medicos|sum(attribute='receitas')) }}</td>
+                <td class="text-center text-muted small">{{ medicos|sum(attribute='qtd_receitas') }}</td>
+                <td class="text-end text-danger">- R$ {{ "%.2f"|format(medicos|sum(attribute='despesas')) }}</td>
+                <td class="text-end {{ 'text-success' if medicos|sum(attribute='liquido') >= 0 else 'text-danger' }}">
+                  R$ {{ "%.2f"|format(medicos|sum(attribute='liquido')) }}
+                </td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5 text-muted">
+          <i class="bi bi-person-badge" style="font-size:2.5rem"></i>
+          <p class="mt-2 mb-0">Nenhum lançamento vinculado a médicos neste período.</p>
+          <small>Os lançamentos são vinculados automaticamente ao dar baixa em contas a receber.</small>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Gráfico -->
+  <div class="col-xl-5">
+    <div class="card mb-3">
+      <div class="card-header">Receitas por médico</div>
+      <div class="card-body">
+        {% if medicos %}
+        <canvas id="graficoMedicos" style="max-height:260px"></canvas>
+        {% else %}
+        <div class="text-center text-muted py-4">Sem dados</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">Receitas × Despesas</div>
+      <div class="card-body">
+        {% if medicos %}
+        <canvas id="graficoComparativo" style="max-height:200px"></canvas>
+        {% else %}
+        <div class="text-center text-muted py-4">Sem dados</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal detalhe do médico -->
+<div class="modal fade" id="modalDetalhe" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="modalDetalheTitulo">Lançamentos</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="conteudoDetalhe" class="p-3 text-center text-muted">Carregando...</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dadosMedicos = {{ medicos | tojson }};
+
+{% if medicos %}
+// Gráfico pizza receitas
+const ctxPizza = document.getElementById('graficoMedicos').getContext('2d');
+new Chart(ctxPizza, {
+  type: 'doughnut',
+  data: {
+    labels: dadosMedicos.map(m => m.medico),
+    datasets: [{
+      data: dadosMedicos.map(m => m.receitas),
+      backgroundColor: ['#1a6fc4','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#84cc16'],
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } } }
+  }
+});
+
+// Gráfico barras comparativo
+const ctxBar = document.getElementById('graficoComparativo').getContext('2d');
+new Chart(ctxBar, {
+  type: 'bar',
+  data: {
+    labels: dadosMedicos.map(m => m.medico.split(' ')[0]),
+    datasets: [
+      { label: 'Receitas', data: dadosMedicos.map(m => m.receitas), backgroundColor: '#22c55e' },
+      { label: 'Despesas', data: dadosMedicos.map(m => m.despesas), backgroundColor: '#f87171' },
+    ]
+  },
+  options: {
+    responsive: true,
+    scales: { y: { beginAtZero: true } },
+    plugins: { legend: { labels: { font: { size: 11 }, boxWidth: 12 } } }
+  }
+});
+{% endif %}
+
+async function verDetalhe(medico) {
+  document.getElementById('modalDetalheTitulo').textContent = medico;
+  document.getElementById('conteudoDetalhe').innerHTML = '<div class="text-center py-4"><div class="spinner-border spinner-border-sm"></div></div>';
+  new bootstrap.Modal(document.getElementById('modalDetalhe')).show();
+
+  const mes = {{ mes }};
+  const ano = {{ ano }};
+  const contaId = '{{ conta_id_str }}';
+  const url = `/extratos?medico=${encodeURIComponent(medico)}&data_ini=${ano}-${String(mes).padStart(2,'0')}-01&data_fim=${ano}-${String(mes).padStart(2,'0')}-31${contaId ? '&conta_id='+contaId : ''}`;
+
+  // Busca lançamentos do médico via API de extratos (filtrando)
+  const r = await fetch(`/api/lancamentos-medico?medico=${encodeURIComponent(medico)}&mes=${mes}&ano=${ano}&conta_id=${contaId}`);
+  const data = await r.json();
+
+  if (!data.length) {
+    document.getElementById('conteudoDetalhe').innerHTML = '<p class="text-muted text-center py-3">Nenhum lançamento encontrado.</p>';
+    return;
+  }
+
+  let receitas = 0, despesas = 0;
+  const linhas = data.map(l => {
+    if (l.valor > 0) receitas += l.valor; else despesas += Math.abs(l.valor);
+    return `<tr>
+      <td>${l.data}</td>
+      <td>${l.descricao}</td>
+      <td><span class="badge ${l.tipo === 'credito' ? 'bg-success' : 'bg-danger'}">${l.tipo === 'credito' ? 'Receita' : 'Despesa'}</span></td>
+      <td class="text-end ${l.valor >= 0 ? 'text-success' : 'text-danger'} fw-semibold">R$ ${Math.abs(l.valor).toFixed(2).replace('.',',')}</td>
+      <td class="text-muted small">${l.conta}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('conteudoDetalhe').innerHTML = `
+    <div class="d-flex gap-4 px-3 py-2 border-bottom bg-light">
+      <div><span class="text-success fw-bold">Receitas: R$ ${receitas.toFixed(2).replace('.',',')}</span></div>
+      <div><span class="text-danger fw-bold">Despesas: R$ ${despesas.toFixed(2).replace('.',',')}</span></div>
+      <div><span class="fw-bold">Líquido: R$ ${(receitas - despesas).toFixed(2).replace('.',',')}</span></div>
+    </div>
+    <div class="table-responsive">
+      <table class="table table-sm mb-0">
+        <thead><tr><th>Data</th><th>Descrição</th><th>Tipo</th><th class="text-end">Valor</th><th>Conta</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>
+    </div>`;
+}
+</script>
+{% endblock %}

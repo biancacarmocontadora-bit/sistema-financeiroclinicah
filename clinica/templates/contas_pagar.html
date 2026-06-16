@@ -1,0 +1,333 @@
+{% extends 'base.html' %}
+{% block title %}Contas a Pagar{% endblock %}
+{% block page_title %}Contas a Pagar{% endblock %}
+
+{% block topbar_actions %}
+<button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#modalNovaConta">
+  <i class="bi bi-plus-lg"></i> Nova Conta
+</button>
+{% endblock %}
+
+{% block content %}
+<!-- KPIs -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-md-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#d97706,#f59e0b)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_pendente) }}</div>
+          <div class="kpi-label">Total pendente</div>
+        </div>
+        <i class="bi bi-receipt kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-md-3">
+    <div class="kpi-card" style="background:linear-gradient(135deg,#dc2626,#f87171)">
+      <div class="d-flex justify-content-between align-items-start">
+        <div>
+          <div class="kpi-value">R$ {{ "%.0f"|format(total_vencido) }}</div>
+          <div class="kpi-label">Vencido</div>
+        </div>
+        <i class="bi bi-exclamation-triangle kpi-icon"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Filtros -->
+<div class="card mb-3">
+  <div class="card-body py-2">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Todos</option>
+          <option value="pendente" {{ 'selected' if filtros.status == 'pendente' }}>Pendente</option>
+          <option value="vencido" {{ 'selected' if filtros.status == 'vencido' }}>Vencido</option>
+          <option value="pago" {{ 'selected' if filtros.status == 'pago' }}>Pago</option>
+          <option value="cancelado" {{ 'selected' if filtros.status == 'cancelado' }}>Cancelado</option>
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Categoria</label>
+        <select name="categoria" class="form-select form-select-sm">
+          <option value="">Todas</option>
+          {% for c in categorias %}
+          <option value="{{ c }}" {{ 'selected' if filtros.categoria == c }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">Vencimento de</label>
+        <input type="date" name="data_ini" class="form-control form-control-sm" value="{{ filtros.data_ini }}">
+      </div>
+      <div class="col-sm-6 col-md-2">
+        <label class="form-label form-label-sm mb-1">até</label>
+        <input type="date" name="data_fim" class="form-control form-control-sm" value="{{ filtros.data_fim }}">
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-primary btn-sm w-100"><i class="bi bi-search"></i></button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0">
+        <thead>
+          <tr><th><input type="checkbox" id="checkAll"></th><th>Descrição</th><th>Fornecedor</th><th>Categoria</th><th>Vencimento</th><th class="text-end">Valor</th><th>Status</th><th>Recorrente</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for c in contas.items %}
+          <tr class="{{ 'table-danger' if c.status == 'vencido' else '' }}">
+            <td><input type="checkbox" class="check-conta" value="{{ c.id }}"></td>
+            <td>{{ c.descricao }}</td>
+            <td>{{ c.fornecedor or '—' }}</td>
+            <td>{{ c.categoria or '—' }}</td>
+            <td>{{ c.data_vencimento.strftime('%d/%m/%Y') }}</td>
+            <td class="text-end fw-semibold">R$ {{ "%.2f"|format(c.valor) }}</td>
+            <td><span class="badge badge-{{ c.status }}">{{ {'pendente':'Pendente','pago':'Pago','vencido':'Vencido','cancelado':'Cancelado'}.get(c.status,c.status) }}</span></td>
+            <td>{% if c.recorrente %}<span class="badge bg-info">{{ c.periodicidade or 'Sim' }}</span>{% else %}—{% endif %}</td>
+            <td>
+              <div class="d-flex gap-1">
+                {% if c.status in ['pendente','vencido'] %}
+                <button class="btn btn-sm btn-success" onclick="pagarConta({{ c.id }}, this)" title="Marcar como pago">
+                  <i class="bi bi-check-lg"></i>
+                </button>
+                {% endif %}
+                <button class="btn btn-sm btn-light text-danger" onclick="excluirConta({{ c.id }}, this)">
+                  <i class="bi bi-trash"></i>
+                </button>
+              </div>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="text-center py-4 text-muted">Nenhuma conta encontrada</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% if contas.pages > 1 %}
+  <div class="card-footer d-flex justify-content-between align-items-center">
+    <small class="text-muted">{{ contas.total }} registros</small>
+    <nav>
+      <ul class="pagination pagination-sm mb-0">
+        {% if contas.has_prev %}<li class="page-item"><a class="page-link" href="?page={{ contas.prev_num }}">‹</a></li>{% endif %}
+        <li class="page-item active"><a class="page-link" href="#">{{ contas.page }}/{{ contas.pages }}</a></li>
+        {% if contas.has_next %}<li class="page-item"><a class="page-link" href="?page={{ contas.next_num }}">›</a></li>{% endif %}
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal Nova Conta -->
+<div class="modal fade" id="modalNovaConta" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Nova Conta a Pagar</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Descrição *</label>
+            <input type="text" id="cDesc" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Fornecedor</label>
+            <input type="text" id="cFornecedor" class="form-control">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Categoria</label>
+            <input type="text" id="cCategoria" class="form-control" list="listaCategorias" placeholder="Ex: Aluguel">
+            <datalist id="listaCategorias">
+              {% for c in categorias %}
+              <option value="{{ c }}">
+              {% endfor %}
+              <option value="Aluguel"><option value="Folha de Pagamento">
+              <option value="Material Médico"><option value="Equipamentos">
+              <option value="Manutenção"><option value="Impostos"><option value="Outros">
+            </datalist>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Valor *</label>
+            <input type="number" id="cValor" class="form-control" step="0.01" min="0">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Vencimento *</label>
+            <input type="date" id="cVencimento" class="form-control">
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="cRecorrente" onchange="toggleRecorrente()">
+              <label class="form-check-label" for="cRecorrente">Conta recorrente</label>
+            </div>
+          </div>
+          <div class="col-12" id="divPeriodicidade" style="display:none">
+            <label class="form-label">Periodicidade</label>
+            <select id="cPeriodicidade" class="form-select">
+              <option value="mensal">Mensal</option>
+              <option value="semanal">Semanal</option>
+              <option value="anual">Anual</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Forma de pagamento</label>
+            <select id="cFormaPagamento" class="form-select">
+              <option value="">— selecione —</option>
+              <option value="dinheiro">Dinheiro</option>
+              <option value="pix">Pix</option>
+              <option value="cartao">Cartão</option>
+              <option value="cheque">Cheque</option>
+              <option value="transferencia">Transferência</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Conta bancária</label>
+            <select id="cContaBancaria" class="form-select">
+              <option value="">— selecione —</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Observação</label>
+            <textarea id="cObs" class="form-control" rows="2"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-primary btn-sm" onclick="salvarConta()">Salvar</button>
+      </div>
+    </div>
+  </div>
+</div>
+<!-- Modal Pagar -->
+<div class="modal fade" id="modalPagar" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Registrar Pagamento</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="pagarId">
+        <div class="mb-3">
+          <label class="form-label">Data do pagamento</label>
+          <input type="date" id="pagarData" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Forma de pagamento</label>
+          <select id="pagarForma" class="form-select">
+            <option value="">— selecione —</option>
+            <option value="dinheiro">Dinheiro</option>
+            <option value="pix">Pix</option>
+            <option value="cartao">Cartão</option>
+            <option value="cheque">Cheque</option>
+            <option value="transferencia">Transferência</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Conta bancária *</label>
+          <select id="pagarConta" class="form-select">
+            <option value="">— selecione —</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+        <button class="btn btn-success btn-sm" onclick="confirmarPagamento()">Confirmar</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let contasBancarias = [];
+
+document.addEventListener('DOMContentLoaded', async function() {
+  const res = await fetch('/api/contas-bancarias?todas=1');
+  contasBancarias = await res.json();
+
+  // popula selects de conta
+  ['cContaBancaria', 'pagarConta'].forEach(selId => {
+    const sel = document.getElementById(selId);
+    contasBancarias.forEach(c => {
+      const opt = new Option(`${c.nome} (${c.banco})`, c.id);
+      sel.appendChild(opt);
+    });
+  });
+});
+
+document.getElementById('checkAll').addEventListener('change', function() {
+  document.querySelectorAll('.check-conta').forEach(c => c.checked = this.checked);
+});
+
+function toggleRecorrente() {
+  document.getElementById('divPeriodicidade').style.display =
+    document.getElementById('cRecorrente').checked ? '' : 'none';
+}
+
+async function salvarConta() {
+  const desc = document.getElementById('cDesc').value;
+  const valor = parseFloat(document.getElementById('cValor').value);
+  const venc = document.getElementById('cVencimento').value;
+  if (!desc || isNaN(valor) || !venc) { showToast('Preencha os campos obrigatórios', 'warning'); return; }
+
+  const res = await apiPost('/contas-pagar/nova', {
+    descricao: desc,
+    fornecedor: document.getElementById('cFornecedor').value,
+    categoria: document.getElementById('cCategoria').value,
+    valor, data_vencimento: venc,
+    forma_pagamento: document.getElementById('cFormaPagamento').value || null,
+    conta_bancaria_id: document.getElementById('cContaBancaria').value || null,
+    recorrente: document.getElementById('cRecorrente').checked,
+    periodicidade: document.getElementById('cPeriodicidade').value,
+    observacao: document.getElementById('cObs').value,
+  });
+  if (res.ok) {
+    showToast('Conta criada!');
+    bootstrap.Modal.getInstance(document.getElementById('modalNovaConta')).hide();
+    setTimeout(() => location.reload(), 700);
+  } else showToast(res.erro, 'danger');
+}
+
+function pagarConta(id, btn) {
+  document.getElementById('pagarId').value = id;
+  document.getElementById('pagarData').value = new Date().toISOString().split('T')[0];
+  document.getElementById('pagarForma').value = '';
+  document.getElementById('pagarConta').value = '';
+  new bootstrap.Modal(document.getElementById('modalPagar')).show();
+}
+
+async function confirmarPagamento() {
+  const id = document.getElementById('pagarId').value;
+  const conta_id = document.getElementById('pagarConta').value;
+  if (!conta_id) { showToast('Selecione a conta bancária', 'warning'); return; }
+
+  const res = await apiPost(`/contas-pagar/${id}/pagar`, {
+    data_pagamento: document.getElementById('pagarData').value,
+    forma_pagamento: document.getElementById('pagarForma').value || null,
+    conta_bancaria_id: conta_id,
+  });
+  if (res.ok) {
+    showToast('Pagamento registrado!');
+    bootstrap.Modal.getInstance(document.getElementById('modalPagar')).hide();
+    setTimeout(() => location.reload(), 700);
+  } else showToast(res.erro || 'Erro ao registrar', 'danger');
+}
+
+async function excluirConta(id, btn) {
+  if (!confirm('Excluir esta conta?')) return;
+  const res = await apiDelete(`/contas-pagar/${id}`);
+  if (res.ok) { btn.closest('tr').remove(); showToast('Excluído!'); }
+}
+</script>
+{% endblock %}
