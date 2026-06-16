@@ -32,7 +32,17 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financeiro.d
 
 def get_conn():
     if USE_POSTGRES:
-        return psycopg2.connect(st.secrets["DATABASE_URL"])
+        import urllib.parse
+        url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
+        return psycopg2.connect(
+            host=url.hostname,
+            port=url.port or 5432,
+            dbname=url.path.lstrip("/"),
+            user=url.username,
+            password=url.password,
+            sslmode="require",
+            connect_timeout=10,
+        )
     return sqlite3.connect(DB_PATH)
 
 def q(sql, params=()):
