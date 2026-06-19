@@ -352,14 +352,11 @@ def get_balance(company_id, bank_id=None, up_to_date=None):
     return bal
 
 companies = get_companies()
-company_names = companies["name"].tolist() if not companies.empty else ["Sem empresa"]
-company_ids = companies["id"].tolist() if not companies.empty else [1]
+cid = int(companies["id"].iloc[0]) if not companies.empty else 1
+sel_company_name = companies["name"].iloc[0] if not companies.empty else "Clinica"
 
 with st.sidebar:
     st.markdown("## Financeiro")
-    st.markdown("---")
-    sel_company_name = st.selectbox("Empresa", company_names, key="sel_company")
-    sel_company_id = company_ids[company_names.index(sel_company_name)] if sel_company_name in company_names else 1
     st.markdown("---")
     page = st.radio("Menu", [
         "Dashboard",
@@ -382,8 +379,6 @@ with st.sidebar:
         st.markdown("**Rede:** `{}:8501`".format(ip))
     except:
         pass
-
-cid = sel_company_id
 
 if page == "Dashboard":
     st.title("Dashboard Financeiro")
@@ -1447,15 +1442,6 @@ Funcionalidades:
 if page == "Agendamentos":
     st.title("Agendamentos")
 
-    # Seletor de empresa independente do sidebar
-    all_companies = get_companies()
-    ag_company_names = all_companies["name"].tolist() if not all_companies.empty else []
-    ag_company_ids   = all_companies["id"].tolist()   if not all_companies.empty else []
-    ag_emp_default   = ag_company_names.index(sel_company_name) if sel_company_name in ag_company_names else 0
-    ag_emp_sel = st.selectbox("Empresa", ag_company_names, index=ag_emp_default, key="ag_empresa")
-    ag_cid = ag_company_ids[ag_company_names.index(ag_emp_sel)] if ag_emp_sel in ag_company_names else cid
-    st.markdown("---")
-
     STATUS_AG = {
         "agendado":   ("Agendado",   "🔵"),
         "confirmado": ("Confirmado", "🟢"),
@@ -1475,7 +1461,7 @@ if page == "Agendamentos":
         eh_cartao = ag_forma_sel in ("Cartao Debito", "Cartao Credito")
 
         if eh_cartao:
-            cf_novo = get_card_fees(ag_cid)
+            cf_novo = get_card_fees(cid)
             bandeiras_disp = sorted(cf_novo["card_type"].unique().tolist()) if not cf_novo.empty else []
             col_b, col_p = st.columns(2)
             with col_b:
@@ -1502,7 +1488,7 @@ if page == "Agendamentos":
 
             # Preview do parcelamento com taxa
             if eh_cartao and ag_valor > 0:
-                cf_novo = get_card_fees(ag_cid)
+                cf_novo = get_card_fees(cid)
                 fee_row = find_card_fee(cf_novo, ag_bandeira or "")
                 taxa_pct = float(fee_row.iloc[0]["fee_percent"]) if not fee_row.empty else 0.0
                 dias_rep = int(fee_row.iloc[0]["days_to_receive"]) if not fee_row.empty else 30
@@ -1530,14 +1516,14 @@ if page == "Agendamentos":
                     (company_id, paciente, medico, data_hora, status, convenio,
                      tipo_consulta, valor, forma_pagamento, cartao_bandeira, cartao_parcelas)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                    (ag_cid, ag_paciente.strip(), ag_medico.strip(),
+                    (cid, ag_paciente.strip(), ag_medico.strip(),
                      data_hora_str, ag_status, ag_convenio.strip(),
                      ag_tipo, ag_valor, ag_forma_sel, ag_bandeira, int(ag_parcelas)))
 
                 # Lanca parcelas no financeiro se pagamento em cartao
                 if eh_cartao and ag_valor > 0:
                     import uuid as _uuid
-                    cf_s = get_card_fees(ag_cid)
+                    cf_s = get_card_fees(cid)
                     fee_r = find_card_fee(cf_s, ag_bandeira or "")
                     taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
                     dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
@@ -1556,7 +1542,7 @@ if page == "Agendamentos":
                              date_competencia, date_caixa, payment_method,
                              status, installment_group, installment_num, installment_total, notes)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (ag_cid, "receita",
+                            (cid, "receita",
                              f"{ag_tipo} - {ag_paciente.strip()} ({ag_bandeira} {i}/{n_s})",
                              liq_p_s,
                              ag_data.strftime("%Y-%m-%d"), dt_caixa,
@@ -1579,7 +1565,7 @@ if page == "Agendamentos":
             f_busca = st.text_input("Buscar nome / medico")
 
         sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND date(data_hora) BETWEEN ? AND ?"
-        params_ag = [ag_cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
+        params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
         if f_status != "Todos":
             sql_ag += " AND status=?"
             params_ag.append(f_status)
@@ -1653,7 +1639,7 @@ if page == "Agendamentos":
                     e_eh_cartao = e_forma_sel in ("Cartao Debito", "Cartao Credito")
 
                     if e_eh_cartao:
-                        cf_edit = get_card_fees(ag_cid)
+                        cf_edit = get_card_fees(cid)
                         bandeiras_edit = sorted(cf_edit["card_type"].unique().tolist()) if not cf_edit.empty else []
                         eb1, ep1 = st.columns(2)
                         with eb1:
@@ -1685,7 +1671,7 @@ if page == "Agendamentos":
                             e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
 
                         if e_eh_cartao and e_val > 0:
-                            cf_ep = get_card_fees(ag_cid)
+                            cf_ep = get_card_fees(cid)
                             fee_ep = find_card_fee(cf_ep, e_bandeira or "")
                             taxa_ep = float(fee_ep.iloc[0]["fee_percent"]) if not fee_ep.empty else 0.0
                             dias_ep = int(fee_ep.iloc[0]["days_to_receive"]) if not fee_ep.empty else 30
@@ -1845,7 +1831,7 @@ A planilha precisa ter pelo menos as colunas de **nome do paciente** e **data**.
                                     (company_id, paciente, medico, data_hora, status,
                                      convenio, tipo_consulta, valor, forma_pagamento)
                                     VALUES (?,?,?,?,?,?,?,?,?)""",
-                                    (ag_cid, paciente,
+                                    (cid, paciente,
                                      medico_i, data_hora_i.strftime("%Y-%m-%d %H:%M"),
                                      status_i, convenio_i, tipo_i, valor_i, forma_i or None))
                                 inseridos += 1
