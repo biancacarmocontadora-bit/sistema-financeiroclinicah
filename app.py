@@ -1464,7 +1464,7 @@ if page == "Agendamentos":
         "cancelado":  ("Cancelado",  "⚫"),
     }
 
-    tab_lista, tab_novo = st.tabs(["Lista de Agendamentos", "Novo Agendamento"])
+    tab_lista, tab_novo, tab_import = st.tabs(["Lista de Agendamentos", "Novo Agendamento", "Importar Planilha"])
 
     with tab_novo:
         st.subheader("Novo Agendamento")
@@ -1718,3 +1718,143 @@ if page == "Agendamentos":
                         run("DELETE FROM agendamentos WHERE id=?", (ag_id,))
                         st.warning("Agendamento excluido.")
                         st.rerun()
+
+    with tab_import:
+        st.subheader("Importar Agendamentos de Planilha")
+        st.markdown("""
+**Formatos aceitos:** `.xlsx`, `.xls`, `.csv`
+
+A planilha precisa ter pelo menos as colunas de **nome do paciente** e **data**. As demais (medico, convenio, tipo, valor, forma de pagamento) são opcionais. Os nomes das colunas podem variar — o sistema detecta automaticamente.
+
+**Exemplos de nomes aceitos para cada campo:**
+
+| Campo | Nomes aceitos na planilha |
+|---|---|
+| Paciente | Paciente, Nome, PACIENTE, NOME |
+| Data | Data, DATA, Data Agendamento, date |
+| Medico | Medico, MEDICO, Profissional, Doctor |
+| Convenio | Convenio, CONVENIO, Plano, PLANO |
+| Tipo | Tipo, TIPO, Procedimento, PROCEDIMENTO |
+| Valor | Valor, VALOR, Value, Preco |
+| Pagamento | Pagamento, Forma Pagamento, FORMA PAGAMENTO |
+| Status | Status, STATUS, Situacao |
+        """)
+
+        arquivo_import = st.file_uploader("Selecione o arquivo", type=["xlsx", "xls", "csv"], key="import_ag")
+
+        if arquivo_import:
+            try:
+                nome_arq = arquivo_import.name.lower()
+                if nome_arq.endswith(".csv"):
+                    df_import = pd.read_csv(arquivo_import, encoding="utf-8-sig")
+                elif nome_arq.endswith(".xlsx"):
+                    df_import = pd.read_excel(arquivo_import, engine="openpyxl")
+                else:
+                    df_import = pd.read_excel(arquivo_import, engine="xlrd")
+
+                # Normaliza nomes de colunas
+                import unicodedata
+                def norm_col(c):
+                    c = str(c).strip().replace("\n", " ")
+                    while "  " in c:
+                        c = c.replace("  ", " ")
+                    c = "".join(ch for ch in unicodedata.normalize("NFD", c) if unicodedata.category(ch) != "Mn")
+                    return c.upper()
+                df_import.columns = [norm_col(c) for c in df_import.columns]
+
+                st.markdown(f"**{len(df_import)} linhas encontradas.** Colunas: `{', '.join(df_import.columns.tolist())}`")
+                st.dataframe(df_import.head(5), use_container_width=True)
+
+                # Mapeamento flexivel de colunas
+                MAPA = {
+                    "paciente":        ["PACIENTE", "NOME", "PATIENT", "NOME PACIENTE"],
+                    "data_hora":       ["DATA", "DATA AGENDAMENTO", "DATA_AGENDAMENTO", "DATE", "DATA HORA", "DATA_HORA"],
+                    "medico":          ["MEDICO", "PROFISSIONAL", "DOCTOR", "MEDICO(A)"],
+                    "convenio":        ["CONVENIO", "PLANO", "CONVENIO PLANO", "PLANO SAUDE"],
+                    "tipo_consulta":   ["TIPO", "PROCEDIMENTO", "TIPO CONSULTA", "TIPO_CONSULTA", "ESPECIALIDADE"],
+                    "valor":           ["VALOR", "VALUE", "PRECO", "PRECO CONSULTA"],
+                    "forma_pagamento": ["FORMA PAGAMENTO", "PAGAMENTO", "FORMA DE PAGAMENTO", "PAYMENT"],
+                    "status":          ["STATUS", "SITUACAO", "SITUAÇÃO"],
+                }
+                col_map = {}
+                for campo, opcoes in MAPA.items():
+                    for op in opcoes:
+                        if op in df_import.columns:
+                            col_map[campo] = op
+                            break
+
+                STATUS_IMPORT = {
+                    "confirmado": "confirmado", "confirmada": "confirmado",
+                    "cancelado": "cancelado", "cancelada": "cancelado",
+                    "realizado": "realizado", "realizada": "realizado",
+                    "falta": "falta", "nao compareceu": "falta", "nao veio": "falta",
+                    "agendado": "agendado", "agendada": "agendado",
+                }
+
+                if "paciente" not in col_map:
+                    st.error("Coluna de paciente nao encontrada. Verifique o arquivo.")
+                elif "data_hora" not in col_map:
+                    st.error("Coluna de data nao encontrada. Verifique o arquivo.")
+                else:
+                    mapeado = {k: v for k, v in col_map.items()}
+                    st.success(f"Colunas detectadas: {mapeado}")
+
+                    if st.button("Importar agendamentos", type="primary", key="btn_import"):
+                        inseridos = 0
+                        erros = 0
+                        for _, row_i in df_import.iterrows():
+                            try:
+                                paciente = str(row_i[col_map["paciente"]]).strip()
+                                if not paciente or paciente.lower() == "nan":
+                                    continue
+
+                                data_val = row_i[col_map["data_hora"]]
+                                if pd.isna(data_val):
+                                    continue
+                                if isinstance(data_val, str):
+                                    data_hora_i = None
+                                    for fmt in ["%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"]:
+                                        try:
+                                            data_hora_i = datetime.strptime(data_val.strip(), fmt)
+                                            break
+                                        except:
+                                            continue
+                                    if not data_hora_i:
+                                        erros += 1
+                                        continue
+                                else:
+                                    data_hora_i = pd.Timestamp(data_val).to_pydatetime()
+
+                                medico_i    = str(row_i.get(col_map.get("medico",""), "")).strip() if col_map.get("medico") else ""
+                                convenio_i  = str(row_i.get(col_map.get("convenio",""), "")).strip() if col_map.get("convenio") else ""
+                                tipo_i      = str(row_i.get(col_map.get("tipo_consulta",""), "")).strip() if col_map.get("tipo_consulta") else ""
+                                valor_i     = float(row_i.get(col_map.get("valor",""), 0) or 0) if col_map.get("valor") else 0.0
+                                forma_i     = str(row_i.get(col_map.get("forma_pagamento",""), "")).strip() if col_map.get("forma_pagamento") else ""
+                                status_raw  = str(row_i.get(col_map.get("status",""), "agendado")).strip().lower() if col_map.get("status") else "agendado"
+                                status_i    = STATUS_IMPORT.get(status_raw, "agendado")
+
+                                for v in [medico_i, convenio_i, tipo_i, forma_i]:
+                                    if v.lower() == "nan":
+                                        v = ""
+                                medico_i   = "" if medico_i.lower()   == "nan" else medico_i
+                                convenio_i = "" if convenio_i.lower() == "nan" else convenio_i
+                                tipo_i     = "" if tipo_i.lower()     == "nan" else tipo_i
+                                forma_i    = "" if forma_i.lower()    == "nan" else forma_i
+
+                                run("""INSERT INTO agendamentos
+                                    (company_id, paciente, medico, data_hora, status,
+                                     convenio, tipo_consulta, valor, forma_pagamento)
+                                    VALUES (?,?,?,?,?,?,?,?,?)""",
+                                    (ag_cid, paciente,
+                                     medico_i, data_hora_i.strftime("%Y-%m-%d %H:%M"),
+                                     status_i, convenio_i, tipo_i, valor_i, forma_i or None))
+                                inseridos += 1
+                            except Exception:
+                                erros += 1
+                                continue
+
+                        st.success(f"Importacao concluida! {inseridos} agendamentos importados. {erros} erros ignorados.")
+                        st.rerun()
+
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo: {e}")
