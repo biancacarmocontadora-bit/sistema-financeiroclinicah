@@ -136,6 +136,31 @@ def init_db():
                 cur.execute(f"ALTER TABLE agendamentos ADD COLUMN IF NOT EXISTS {col} {definition}")
             except Exception:
                 pass
+        # Garante que existe ao menos uma empresa
+        cur.execute("SELECT COUNT(*) FROM companies")
+        if cur.fetchone()[0] == 0:
+            cur.execute("INSERT INTO companies (name, cnpj, active) VALUES (%s, %s, %s)", ("Minha Clinica", "", 1))
+            conn.commit()
+            cur.execute("SELECT id FROM companies LIMIT 1")
+            empresa_id = cur.fetchone()[0]
+            cur.executemany("INSERT INTO card_fees (company_id, card_type, installments, fee_percent, days_to_receive) VALUES (%s,%s,%s,%s,%s)", [
+                (empresa_id, "credito_vista", 1, 2.5, 30),
+                (empresa_id, "credito_2x",   2, 3.5, 30),
+                (empresa_id, "credito_3x",   3, 4.0, 30),
+                (empresa_id, "credito_6x",   6, 5.5, 30),
+                (empresa_id, "credito_12x", 12, 7.0, 30),
+                (empresa_id, "debito",        1, 1.5,  1),
+            ])
+            cur.executemany("INSERT INTO categories (company_id, name, type) VALUES (%s,%s,%s)", [
+                (empresa_id, "Consultas",       "receita"),
+                (empresa_id, "Procedimentos",   "receita"),
+                (empresa_id, "Outros Servicos", "receita"),
+                (empresa_id, "Salarios",        "despesa"),
+                (empresa_id, "Aluguel",         "despesa"),
+                (empresa_id, "Materiais",       "despesa"),
+                (empresa_id, "Impostos",        "despesa"),
+                (empresa_id, "Outras Despesas", "despesa"),
+            ])
         conn.commit()
         conn.close()
     else:
