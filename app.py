@@ -1625,7 +1625,80 @@ if page == "Agendamentos":
                 c6.write(f"{valor_fmt} | {forma_fmt}")
                 c7.write(emoji_s)
 
-                with st.expander("Editar / Excluir"):
+                # --- Pagamento ---
+                ja_pago = status_k in ("realizado",)
+                with st.expander("💳 Efetuar Pagamento" + (" ✅ Pago" if ja_pago else "")):
+                    if ja_pago:
+                        st.success("Este agendamento ja foi marcado como realizado.")
+                    else:
+                        banks_pag = get_banks(cid)
+                        bank_opts_pag = {r["name"]: int(r["id"]) for _, r in banks_pag.iterrows()} if not banks_pag.empty else {}
+                        with st.form(f"pag_ag_{ag_id}"):
+                            p1, p2, p3 = st.columns(3)
+                            with p1:
+                                p_valor = st.number_input("Valor Recebido (R$)",
+                                    value=float(row["valor"] or 0), min_value=0.0,
+                                    step=0.01, format="%.2f", key=f"pv_{ag_id}")
+                            with p2:
+                                formas_pag = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+                                forma_atual = row["forma_pagamento"] if row["forma_pagamento"] in formas_pag else "Dinheiro"
+                                p_forma = st.selectbox("Forma de Pagamento", formas_pag,
+                                    index=formas_pag.index(forma_atual), key=f"pf_{ag_id}")
+                            with p3:
+                                p_banco = st.selectbox("Banco", list(bank_opts_pag.keys()), key=f"pb_{ag_id}") if bank_opts_pag else None
+                            p_data = st.date_input("Data do Pagamento", value=date.today(), key=f"pd_{ag_id}")
+                            p_obs  = st.text_input("Observacao (opcional)", key=f"po_{ag_id}")
+                            confirmar_pag = st.form_submit_button("✅ Confirmar Pagamento", type="primary")
+
+                        if confirmar_pag:
+                            bank_id_pag = bank_opts_pag.get(p_banco) if p_banco else None
+                            eh_cartao_pag = p_forma in ("Cartao Debito", "Cartao Credito")
+
+                            if eh_cartao_pag:
+                                import uuid as _uuid2
+                                cf_pag = get_card_fees(cid)
+                                fee_pag = find_card_fee(cf_pag, p_forma.lower().replace(" ", "_"))
+                                taxa_pag = float(fee_pag.iloc[0]["fee_percent"]) if not fee_pag.empty else 0.0
+                                dias_pag = int(fee_pag.iloc[0]["days_to_receive"]) if not fee_pag.empty else 30
+                                n_pag = int(row.get("cartao_parcelas") or 1) if p_forma == "Cartao Credito" else 1
+                                liq_pag = round(p_valor - p_valor * taxa_pag / 100, 2)
+                                liq_p_pag = round(liq_pag / n_pag, 2)
+                                grupo_pag = str(_uuid2.uuid4())[:8]
+                                for i in range(1, n_pag + 1):
+                                    if p_forma == "Cartao Debito":
+                                        dt_cx = (p_data + timedelta(days=dias_pag)).strftime("%Y-%m-%d")
+                                    else:
+                                        dt_cx = (p_data + timedelta(days=dias_pag * i)).strftime("%Y-%m-%d")
+                                    run("""INSERT INTO transactions
+                                        (company_id, bank_id, type, description, amount,
+                                         date_competencia, date_caixa, payment_method,
+                                         status, installment_group, installment_num, installment_total, notes)
+                                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                        (cid, bank_id_pag, "receita",
+                                         f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']} ({p_forma} {i}/{n_pag})",
+                                         liq_p_pag,
+                                         p_data.strftime("%Y-%m-%d"), dt_cx,
+                                         p_forma, "pendente",
+                                         grupo_pag, i, n_pag,
+                                         p_obs or f"Taxa {taxa_pag:.2f}%. Bruto: {fmt_brl(p_valor)}"))
+                            else:
+                                run("""INSERT INTO transactions
+                                    (company_id, bank_id, type, description, amount,
+                                     date_competencia, date_caixa, payment_method, status, notes)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                                    (cid, bank_id_pag, "receita",
+                                     f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']}",
+                                     p_valor,
+                                     p_data.strftime("%Y-%m-%d"), p_data.strftime("%Y-%m-%d"),
+                                     p_forma, "pago",
+                                     p_obs or ""))
+
+                            run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
+                                (p_forma, p_valor, ag_id))
+                            st.success(f"Pagamento de {fmt_brl(p_valor)} registrado e lancado no financeiro!")
+                            st.rerun()
+
+                with st.expander("✏️ Editar / Excluir"):
                     try:
                         e_dt = datetime.strptime(row["data_hora"][:10], "%Y-%m-%d").date()
                     except:
