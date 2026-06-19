@@ -120,8 +120,22 @@ def init_db():
                 id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL, card_type TEXT NOT NULL,
                 installments INTEGER NOT NULL, fee_percent REAL NOT NULL,
                 days_to_receive INTEGER NOT NULL)""",
+            """CREATE TABLE IF NOT EXISTS agendamentos (
+                id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL,
+                paciente TEXT NOT NULL, medico TEXT, especialidade TEXT,
+                data_hora TEXT NOT NULL, status TEXT DEFAULT 'agendado',
+                convenio TEXT, tipo_consulta TEXT, valor REAL DEFAULT 0,
+                forma_pagamento TEXT, cartao_bandeira TEXT,
+                cartao_parcelas INTEGER DEFAULT 1, observacao TEXT,
+                criado_em TIMESTAMP DEFAULT NOW())""",
         ]:
             cur.execute(stmt)
+        # Migra colunas de cartao em bancos existentes (Postgres)
+        for col, definition in [("cartao_bandeira", "TEXT"), ("cartao_parcelas", "INTEGER DEFAULT 1")]:
+            try:
+                cur.execute(f"ALTER TABLE agendamentos ADD COLUMN IF NOT EXISTS {col} {definition}")
+            except Exception:
+                pass
         conn.commit()
         conn.close()
     else:
@@ -165,7 +179,31 @@ def init_db():
                 installments INTEGER NOT NULL, fee_percent REAL NOT NULL,
                 days_to_receive INTEGER NOT NULL,
                 FOREIGN KEY(company_id) REFERENCES companies(id));
+            CREATE TABLE IF NOT EXISTS agendamentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                paciente TEXT NOT NULL,
+                medico TEXT,
+                especialidade TEXT,
+                data_hora TEXT NOT NULL,
+                status TEXT DEFAULT 'agendado',
+                convenio TEXT,
+                tipo_consulta TEXT,
+                valor REAL DEFAULT 0,
+                forma_pagamento TEXT,
+                cartao_bandeira TEXT,
+                cartao_parcelas INTEGER DEFAULT 1,
+                observacao TEXT,
+                criado_em TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY(company_id) REFERENCES companies(id));
         """)
+        # Migra colunas de cartao em bancos existentes
+        for col, definition in [("cartao_bandeira", "TEXT"), ("cartao_parcelas", "INTEGER DEFAULT 1")]:
+            try:
+                cur.execute(f"ALTER TABLE agendamentos ADD COLUMN {col} {definition}")
+                conn.commit()
+            except Exception:
+                pass
         conn.commit()
         cur.execute("SELECT COUNT(*) FROM companies")
         if cur.fetchone()[0] == 0:
@@ -325,6 +363,7 @@ with st.sidebar:
     st.markdown("---")
     page = st.radio("Menu", [
         "Dashboard",
+        "Agendamentos",
         "Bancos",
         "Nova Entrada",
         "Nova Saida",
@@ -1389,3 +1428,269 @@ Funcionalidades:
                     st.rerun()
                 else:
                     st.error("Digite CONFIRMAR para prosseguir.")
+
+if page == "Agendamentos":
+    st.title("Agendamentos")
+
+    STATUS_AG = {
+        "agendado":   ("Agendado",   "🔵"),
+        "confirmado": ("Confirmado", "🟢"),
+        "realizado":  ("Realizado",  "✅"),
+        "falta":      ("Falta",      "🔴"),
+        "cancelado":  ("Cancelado",  "⚫"),
+    }
+
+    tab_lista, tab_novo = st.tabs(["Lista de Agendamentos", "Novo Agendamento"])
+
+    with tab_novo:
+        st.subheader("Novo Agendamento")
+        FORMAS_AG = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+
+        # Controle reativo de forma de pagamento fora do form
+        ag_forma_sel = st.selectbox("Forma de Pagamento", FORMAS_AG, key="novo_forma")
+        eh_cartao = ag_forma_sel in ("Cartao Debito", "Cartao Credito")
+
+        if eh_cartao:
+            cf_novo = get_card_fees(cid)
+            bandeiras_disp = sorted(cf_novo["card_type"].unique().tolist()) if not cf_novo.empty else []
+            col_b, col_p = st.columns(2)
+            with col_b:
+                ag_bandeira = st.selectbox("Bandeira / Tipo do Cartao", bandeiras_disp if bandeiras_disp else ["credito_vista"], key="novo_band")
+            with col_p:
+                ag_parcelas = st.number_input("Numero de Parcelas", min_value=1, max_value=12, value=1, step=1, key="novo_parc") if ag_forma_sel == "Cartao Credito" else 1
+        else:
+            ag_bandeira = None
+            ag_parcelas = 1
+
+        with st.form("form_novo_ag", clear_on_submit=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                ag_paciente = st.text_input("Nome do Paciente *")
+                ag_convenio = st.text_input("Convenio / Plano")
+            with col2:
+                ag_medico = st.text_input("Medico")
+                ag_data = st.date_input("Data do Agendamento", value=date.today())
+            col3, col4 = st.columns(2)
+            with col3:
+                ag_tipo = st.selectbox("Tipo", ["Consulta", "Procedimento"])
+            with col4:
+                ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
+
+            # Preview do parcelamento com taxa
+            if eh_cartao and ag_valor > 0:
+                cf_novo = get_card_fees(cid)
+                fee_row = find_card_fee(cf_novo, ag_bandeira or "")
+                taxa_pct = float(fee_row.iloc[0]["fee_percent"]) if not fee_row.empty else 0.0
+                dias_rep = int(fee_row.iloc[0]["days_to_receive"]) if not fee_row.empty else 30
+                n_parc = int(ag_parcelas) if ag_forma_sel == "Cartao Credito" else 1
+                valor_taxa = round(ag_valor * taxa_pct / 100, 2)
+                valor_liq = round(ag_valor - valor_taxa, 2)
+                liq_parcela = round(valor_liq / n_parc, 2)
+                st.info(
+                    f"Taxa: {taxa_pct:.2f}% = {fmt_brl(valor_taxa)} | "
+                    f"Liquido: {fmt_brl(valor_liq)} | "
+                    f"{n_parc}x de {fmt_brl(liq_parcela)} "
+                    f"(repasse em ~{dias_rep} dias)"
+                )
+
+            ag_status = st.selectbox("Status", list(STATUS_AG.keys()),
+                                     format_func=lambda s: STATUS_AG[s][1] + " " + STATUS_AG[s][0])
+            salvar = st.form_submit_button("Salvar Agendamento", type="primary")
+
+        if salvar:
+            if not ag_paciente.strip():
+                st.error("Informe o nome do paciente.")
+            else:
+                data_hora_str = ag_data.strftime("%Y-%m-%d") + " 08:00"
+                run("""INSERT INTO agendamentos
+                    (company_id, paciente, medico, data_hora, status, convenio,
+                     tipo_consulta, valor, forma_pagamento, cartao_bandeira, cartao_parcelas)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (cid, ag_paciente.strip(), ag_medico.strip(),
+                     data_hora_str, ag_status, ag_convenio.strip(),
+                     ag_tipo, ag_valor, ag_forma_sel, ag_bandeira, int(ag_parcelas)))
+
+                # Lanca parcelas no financeiro se pagamento em cartao
+                if eh_cartao and ag_valor > 0:
+                    import uuid as _uuid
+                    cf_s = get_card_fees(cid)
+                    fee_r = find_card_fee(cf_s, ag_bandeira or "")
+                    taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
+                    dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
+                    n_s = int(ag_parcelas) if ag_forma_sel == "Cartao Credito" else 1
+                    valor_liq_s = round(ag_valor - ag_valor * taxa_s / 100, 2)
+                    liq_p_s = round(valor_liq_s / n_s, 2)
+                    grupo = str(_uuid.uuid4())[:8]
+                    data_base = ag_data
+                    for i in range(1, n_s + 1):
+                        if ag_forma_sel == "Cartao Debito":
+                            dt_caixa = (data_base + timedelta(days=dias_s)).strftime("%Y-%m-%d")
+                        else:
+                            dt_caixa = (data_base + timedelta(days=dias_s * i)).strftime("%Y-%m-%d")
+                        run("""INSERT INTO transactions
+                            (company_id, type, description, amount,
+                             date_competencia, date_caixa, payment_method,
+                             status, installment_group, installment_num, installment_total, notes)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            (cid, "receita",
+                             f"{ag_tipo} - {ag_paciente.strip()} ({ag_bandeira} {i}/{n_s})",
+                             liq_p_s,
+                             ag_data.strftime("%Y-%m-%d"), dt_caixa,
+                             ag_forma_sel, "pendente",
+                             grupo, i, n_s,
+                             f"Taxa {taxa_s:.2f}% aplicada. Bruto: {fmt_brl(ag_valor)}"))
+                st.success(f"Agendamento de **{ag_paciente}** salvo!")
+                st.rerun()
+
+    with tab_lista:
+        col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 2])
+        with col_f1:
+            f_data_ini = st.date_input("De", value=date.today().replace(day=1), key="ag_ini")
+        with col_f2:
+            f_data_fim = st.date_input("Ate", value=date.today(), key="ag_fim")
+        with col_f3:
+            f_status = st.selectbox("Status", ["Todos"] + list(STATUS_AG.keys()),
+                                    format_func=lambda s: "Todos" if s == "Todos" else STATUS_AG[s][1] + " " + STATUS_AG[s][0])
+        with col_f4:
+            f_busca = st.text_input("Buscar nome / medico")
+
+        sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND date(data_hora) BETWEEN ? AND ?"
+        params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
+        if f_status != "Todos":
+            sql_ag += " AND status=?"
+            params_ag.append(f_status)
+        if f_busca.strip():
+            sql_ag += " AND (paciente LIKE ? OR medico LIKE ?)"
+            params_ag += [f"%{f_busca}%", f"%{f_busca}%"]
+        sql_ag += " ORDER BY data_hora ASC"
+
+        df_ag = q(sql_ag, tuple(params_ag))
+
+        if df_ag.empty:
+            st.info("Nenhum agendamento encontrado para o periodo.")
+        else:
+            m1, m2, m3, m4, m5 = st.columns(5)
+            for col_m, status_key in zip([m1, m2, m3, m4, m5], STATUS_AG.keys()):
+                cnt = len(df_ag[df_ag["status"] == status_key])
+                emoji, label = STATUS_AG[status_key][1], STATUS_AG[status_key][0]
+                col_m.metric(f"{emoji} {label}", cnt)
+
+            st.markdown("---")
+
+            total_val = df_ag["valor"].fillna(0).sum()
+            st.markdown(f"**Total do periodo:** {fmt_brl(total_val)}")
+            st.markdown("---")
+
+            # Cabecalho da tabela
+            h1, h2, h3, h4, h5, h6, h7 = st.columns([3, 2, 2, 2, 2, 2, 1])
+            h1.markdown("**Nome**")
+            h2.markdown("**Convenio**")
+            h3.markdown("**Data**")
+            h4.markdown("**Medico**")
+            h5.markdown("**Tipo**")
+            h6.markdown("**Valor / Pagamento**")
+            h7.markdown("**Status**")
+            st.markdown("---")
+
+            FORMAS_AG = ["", "Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+
+            for _, row in df_ag.iterrows():
+                ag_id = int(row["id"])
+                status_k = row["status"]
+                emoji_s = STATUS_AG.get(status_k, ("?","❓"))[1]
+                data_fmt = row["data_hora"][:10] if row["data_hora"] else ""
+                if data_fmt:
+                    partes = data_fmt.split("-")
+                    if len(partes) == 3:
+                        data_fmt = f"{partes[2]}/{partes[1]}/{partes[0]}"
+                valor_fmt = fmt_brl(row["valor"]) if row["valor"] else "—"
+                forma_fmt = row["forma_pagamento"] or "—"
+
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([3, 2, 2, 2, 2, 2, 1])
+                c1.write(row["paciente"] or "—")
+                c2.write(row["convenio"] or "—")
+                c3.write(data_fmt or "—")
+                c4.write(row["medico"] or "—")
+                c5.write(row["tipo_consulta"] or "—")
+                c6.write(f"{valor_fmt} | {forma_fmt}")
+                c7.write(emoji_s)
+
+                with st.expander("Editar / Excluir"):
+                    try:
+                        e_dt = datetime.strptime(row["data_hora"][:10], "%Y-%m-%d").date()
+                    except:
+                        e_dt = date.today()
+
+                    e_forma_sel = st.selectbox(
+                        "Forma de Pagamento", FORMAS_AG,
+                        index=FORMAS_AG.index(row["forma_pagamento"]) if row["forma_pagamento"] in FORMAS_AG else 0,
+                        key=f"ef_{ag_id}"
+                    )
+                    e_eh_cartao = e_forma_sel in ("Cartao Debito", "Cartao Credito")
+
+                    if e_eh_cartao:
+                        cf_edit = get_card_fees(cid)
+                        bandeiras_edit = sorted(cf_edit["card_type"].unique().tolist()) if not cf_edit.empty else []
+                        eb1, ep1 = st.columns(2)
+                        with eb1:
+                            band_atual = row.get("cartao_bandeira") or (bandeiras_edit[0] if bandeiras_edit else "")
+                            band_idx = bandeiras_edit.index(band_atual) if band_atual in bandeiras_edit else 0
+                            e_bandeira = st.selectbox("Bandeira / Tipo", bandeiras_edit if bandeiras_edit else ["credito_vista"], index=band_idx, key=f"eband_{ag_id}")
+                        with ep1:
+                            e_parcelas = st.number_input("Parcelas", min_value=1, max_value=12,
+                                                          value=int(row.get("cartao_parcelas") or 1),
+                                                          step=1, key=f"epapc_{ag_id}") if e_forma_sel == "Cartao Credito" else 1
+                    else:
+                        e_bandeira = None
+                        e_parcelas = 1
+
+                    with st.form(f"edit_ag_{ag_id}"):
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            e_pac = st.text_input("Nome", value=row["paciente"] or "", key=f"ep_{ag_id}")
+                            e_conv = st.text_input("Convenio", value=row["convenio"] or "", key=f"ec_{ag_id}")
+                        with ec2:
+                            e_med = st.text_input("Medico", value=row["medico"] or "", key=f"em_{ag_id}")
+                            e_data = st.date_input("Data", value=e_dt, key=f"ed_{ag_id}")
+                        ec3, ec4 = st.columns(2)
+                        with ec3:
+                            tipo_opts = ["Consulta", "Procedimento"]
+                            tipo_idx = tipo_opts.index(row["tipo_consulta"]) if row["tipo_consulta"] in tipo_opts else 0
+                            e_tipo = st.selectbox("Tipo", tipo_opts, index=tipo_idx, key=f"et_{ag_id}")
+                        with ec4:
+                            e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
+
+                        if e_eh_cartao and e_val > 0:
+                            cf_ep = get_card_fees(cid)
+                            fee_ep = find_card_fee(cf_ep, e_bandeira or "")
+                            taxa_ep = float(fee_ep.iloc[0]["fee_percent"]) if not fee_ep.empty else 0.0
+                            dias_ep = int(fee_ep.iloc[0]["days_to_receive"]) if not fee_ep.empty else 30
+                            n_ep = int(e_parcelas) if e_forma_sel == "Cartao Credito" else 1
+                            vl_ep = round(e_val - e_val * taxa_ep / 100, 2)
+                            st.info(f"Taxa: {taxa_ep:.2f}% | Liquido: {fmt_brl(vl_ep)} | {n_ep}x de {fmt_brl(round(vl_ep/n_ep,2))} (~{dias_ep} dias)")
+
+                        e_status = st.selectbox("Status", list(STATUS_AG.keys()),
+                                                index=list(STATUS_AG.keys()).index(status_k) if status_k in STATUS_AG else 0,
+                                                format_func=lambda s: STATUS_AG[s][1] + " " + STATUS_AG[s][0],
+                                                key=f"es_{ag_id}")
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            salvar_ed = st.form_submit_button("Salvar", type="primary")
+                        with col_btn2:
+                            excluir_ed = st.form_submit_button("Excluir")
+
+                    if salvar_ed:
+                        nova_dh = e_data.strftime("%Y-%m-%d") + " 08:00"
+                        run("""UPDATE agendamentos SET paciente=?, medico=?,
+                            data_hora=?, status=?, convenio=?,
+                            tipo_consulta=?, valor=?, forma_pagamento=?,
+                            cartao_bandeira=?, cartao_parcelas=? WHERE id=?""",
+                            (e_pac, e_med, nova_dh, e_status, e_conv,
+                             e_tipo, e_val, e_forma_sel,
+                             e_bandeira, int(e_parcelas), ag_id))
+                        st.success("Agendamento atualizado!")
+                        st.rerun()
+                    if excluir_ed:
+                        run("DELETE FROM agendamentos WHERE id=?", (ag_id,))
+                        st.warning("Agendamento excluido.")
+                        st.rerun()
