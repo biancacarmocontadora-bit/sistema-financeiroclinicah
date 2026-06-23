@@ -1578,7 +1578,7 @@ if page == "Agendamentos":
                 st.rerun()
 
     with tab_lista:
-        col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 2])
+        col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
         with col_f1:
             f_data_ini = st.date_input("De", value=date.today().replace(day=1), key="ag_ini")
         with col_f2:
@@ -1586,8 +1586,17 @@ if page == "Agendamentos":
         with col_f3:
             f_status = st.selectbox("Status", ["Todos"] + list(STATUS_AG.keys()),
                                     format_func=lambda s: "Todos" if s == "Todos" else STATUS_AG[s][1] + " " + STATUS_AG[s][0])
+
+        col_f4, col_f5, col_f6 = st.columns([2, 2, 2])
         with col_f4:
             f_busca = st.text_input("Buscar nome / medico")
+        with col_f5:
+            # Lista convenios distintos ja cadastrados
+            convs = q("SELECT DISTINCT convenio FROM agendamentos WHERE company_id=? AND convenio IS NOT NULL AND convenio != '' ORDER BY convenio", (cid,))
+            conv_opts = ["Todos"] + convs["convenio"].tolist() if not convs.empty else ["Todos"]
+            f_convenio = st.selectbox("Convenio", conv_opts)
+        with col_f6:
+            f_medico = st.text_input("Medico")
 
         sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND date(data_hora) BETWEEN ? AND ?"
         params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
@@ -1595,8 +1604,14 @@ if page == "Agendamentos":
             sql_ag += " AND status=?"
             params_ag.append(f_status)
         if f_busca.strip():
-            sql_ag += " AND (paciente LIKE ? OR medico LIKE ?)"
-            params_ag += [f"%{f_busca}%", f"%{f_busca}%"]
+            sql_ag += " AND paciente LIKE ?"
+            params_ag.append(f"%{f_busca}%")
+        if f_convenio != "Todos":
+            sql_ag += " AND convenio=?"
+            params_ag.append(f_convenio)
+        if f_medico.strip():
+            sql_ag += " AND medico LIKE ?"
+            params_ag.append(f"%{f_medico}%")
         sql_ag += " ORDER BY data_hora ASC"
 
         df_ag = q(sql_ag, tuple(params_ag))
