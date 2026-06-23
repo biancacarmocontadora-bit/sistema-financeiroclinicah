@@ -1521,7 +1521,7 @@ if page == "Agendamentos":
                 ag_data = st.date_input("Data do Agendamento", value=date.today())
             col3, col4 = st.columns(2)
             with col3:
-                ag_tipo = st.selectbox("Tipo", ["Consulta", "Procedimento"])
+                ag_tipo = st.selectbox("Tipo", ["Consulta", "Procedimento", "Raio X"])
             with col4:
                 ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
 
@@ -1819,7 +1819,7 @@ if page == "Agendamentos":
                             e_data = st.date_input("Data", value=e_dt, key=f"ed_{ag_id}")
                         ec3, ec4 = st.columns(2)
                         with ec3:
-                            tipo_opts = ["Consulta", "Procedimento"]
+                            tipo_opts = ["Consulta", "Procedimento", "Raio X"]
                             tipo_idx = tipo_opts.index(row["tipo_consulta"]) if row["tipo_consulta"] in tipo_opts else 0
                             e_tipo = st.selectbox("Tipo", tipo_opts, index=tipo_idx, key=f"et_{ag_id}")
                         with ec4:
