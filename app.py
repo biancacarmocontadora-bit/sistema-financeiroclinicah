@@ -422,13 +422,27 @@ if page == "Dashboard":
         if not profs_dash.empty:
             for _, p in profs_dash.iterrows():
                 prof_dash_opts[p["name"]] = int(p["id"])
-        prof_dash_sel = st.selectbox("Profissional", list(prof_dash_opts.keys()))
+        # Complementa com medicos dos agendamentos se nao ha profissionais cadastrados
+        if len(prof_dash_opts) == 1:
+            medicos_ag = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
+            if not medicos_ag.empty:
+                for m in medicos_ag["medico"].tolist():
+                    prof_dash_opts[m] = m
+        prof_dash_sel = st.selectbox("Profissional / Medico", list(prof_dash_opts.keys()))
     with col_regime:
         regime_dash = st.selectbox("Regime", ["Competencia", "Caixa"])
 
     prof_dash_id = prof_dash_opts[prof_dash_sel]
-    prof_sql = " AND professional_id=?" if prof_dash_id else ""
-    prof_param = (prof_dash_id,) if prof_dash_id else ()
+    # prof_dash_id pode ser int (professional_id) ou str (nome do medico do agendamento)
+    if prof_dash_id is None:
+        prof_sql = ""
+        prof_param = ()
+    elif isinstance(prof_dash_id, int):
+        prof_sql = " AND professional_id=?"
+        prof_param = (prof_dash_id,)
+    else:
+        prof_sql = ""
+        prof_param = ()
     campo_dash = "date_competencia" if regime_dash == "Competencia" else "date_caixa"
 
     first_month = date(ano_sel, mes_sel, 1)
