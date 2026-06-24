@@ -1601,16 +1601,21 @@ if page == "Agendamentos":
             f_status = st.selectbox("Status", ["Todos"] + list(STATUS_AG.keys()),
                                     format_func=lambda s: "Todos" if s == "Todos" else STATUS_AG[s][1] + " " + STATUS_AG[s][0])
 
-        col_f4, col_f5, col_f6 = st.columns([2, 2, 2])
+        col_f4, col_f5, col_f6, col_f7 = st.columns([2, 2, 2, 2])
         with col_f4:
-            f_busca = st.text_input("Buscar nome / medico")
+            f_busca = st.text_input("Buscar nome paciente")
         with col_f5:
-            # Lista convenios distintos ja cadastrados
             convs = q("SELECT DISTINCT convenio FROM agendamentos WHERE company_id=? AND convenio IS NOT NULL AND convenio != '' ORDER BY convenio", (cid,))
             conv_opts = ["Todos"] + convs["convenio"].tolist() if not convs.empty else ["Todos"]
             f_convenio = st.selectbox("Convenio", conv_opts)
         with col_f6:
-            f_medico = st.text_input("Medico")
+            medicos_f = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
+            medico_opts = ["Todos"] + medicos_f["medico"].tolist() if not medicos_f.empty else ["Todos"]
+            f_medico = st.selectbox("Profissional / Medico", medico_opts)
+        with col_f7:
+            tipos_f = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+            tipo_opts_f = ["Todos"] + tipos_f["tipo_consulta"].tolist() if not tipos_f.empty else ["Todos"]
+            f_tipo = st.selectbox("Tipo", tipo_opts_f)
 
         sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND date(data_hora) BETWEEN ? AND ?"
         params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
@@ -1623,9 +1628,12 @@ if page == "Agendamentos":
         if f_convenio != "Todos":
             sql_ag += " AND convenio=?"
             params_ag.append(f_convenio)
-        if f_medico.strip():
-            sql_ag += " AND medico LIKE ?"
-            params_ag.append(f"%{f_medico}%")
+        if f_medico != "Todos":
+            sql_ag += " AND medico=?"
+            params_ag.append(f_medico)
+        if f_tipo != "Todos":
+            sql_ag += " AND tipo_consulta=?"
+            params_ag.append(f_tipo)
         sql_ag += " ORDER BY data_hora ASC"
 
         df_ag = q(sql_ag, tuple(params_ag))
