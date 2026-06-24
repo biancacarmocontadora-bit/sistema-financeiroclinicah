@@ -1495,23 +1495,34 @@ if page == "Agendamentos":
         st.subheader("Novo Agendamento")
         FORMAS_AG = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
 
-        # Campos reativos fora do form
-        tipos_cad = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
-        tipos_base = ["Consulta", "Procedimento", "Raio X"]
-        tipos_extras = [t for t in (tipos_cad["tipo_consulta"].tolist() if not tipos_cad.empty else []) if t not in tipos_base]
-        tipos_lista = tipos_base + tipos_extras + ["Outro..."]
+        # Carrega listas do banco para selectboxes reativos
+        tipos_cad  = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+        medicos_cad = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
+        convs_cad  = q("SELECT DISTINCT convenio FROM agendamentos WHERE company_id=? AND convenio IS NOT NULL AND convenio != '' ORDER BY convenio", (cid,))
 
-        rt1, rt2 = st.columns(2)
-        with rt1:
-            ag_tipo_sel = st.selectbox("Tipo de Atendimento", tipos_lista, key="novo_tipo_sel")
-        with rt2:
-            ag_tipo = st.text_input("Especificar tipo", key="novo_tipo_custom") if ag_tipo_sel == "Outro..." else ag_tipo_sel
-            if ag_tipo_sel != "Outro...":
-                st.empty()
+        tipos_base  = ["Consulta", "Procedimento", "Raio X"]
+        tipos_lista = tipos_base + [t for t in (tipos_cad["tipo_consulta"].tolist() if not tipos_cad.empty else []) if t not in tipos_base] + ["+ Novo tipo..."]
+        medicos_lista = [""] + (medicos_cad["medico"].tolist() if not medicos_cad.empty else []) + ["+ Novo medico..."]
+        convs_lista   = [""] + (convs_cad["convenio"].tolist() if not convs_cad.empty else []) + ["+ Novo convenio..."]
 
-        ag_forma_sel = st.selectbox("Forma de Pagamento", FORMAS_AG, key="novo_forma")
+        # Linha 1: Tipo | Médico
+        rn1, rn2 = st.columns(2)
+        with rn1:
+            ag_tipo_sel = st.selectbox("Tipo de Atendimento *", tipos_lista, key="novo_tipo_sel")
+            ag_tipo = st.text_input("Qual tipo?", key="novo_tipo_custom") if ag_tipo_sel == "+ Novo tipo..." else ag_tipo_sel
+        with rn2:
+            ag_medico_sel = st.selectbox("Medico", medicos_lista, key="novo_med_sel")
+            ag_medico = st.text_input("Nome do medico", key="novo_med_custom") if ag_medico_sel == "+ Novo medico..." else ag_medico_sel
+
+        # Linha 2: Convênio | Forma de Pagamento
+        rn3, rn4 = st.columns(2)
+        with rn3:
+            ag_conv_sel = st.selectbox("Convenio / Plano", convs_lista, key="novo_conv_sel")
+            ag_convenio = st.text_input("Nome do convenio", key="novo_conv_custom") if ag_conv_sel == "+ Novo convenio..." else ag_conv_sel
+        with rn4:
+            ag_forma_sel = st.selectbox("Forma de Pagamento", FORMAS_AG, key="novo_forma")
+
         eh_cartao = ag_forma_sel in ("Cartao Debito", "Cartao Credito")
-
         if eh_cartao:
             cf_novo = get_card_fees(cid)
             bandeiras_disp = sorted(cf_novo["card_type"].unique().tolist()) if not cf_novo.empty else []
@@ -1528,9 +1539,7 @@ if page == "Agendamentos":
             col1, col2 = st.columns(2)
             with col1:
                 ag_paciente = st.text_input("Nome do Paciente *")
-                ag_convenio = st.text_input("Convenio / Plano")
             with col2:
-                ag_medico = st.text_input("Medico")
                 ag_data = st.date_input("Data do Agendamento", value=date.today())
             ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
 
@@ -1843,13 +1852,26 @@ if page == "Agendamentos":
                         e_bandeira = None
                         e_parcelas = 1
 
+                    # Medico, convenio fora do form para serem reativos
+                    ee1, ee2 = st.columns(2)
+                    with ee1:
+                        med_val = row["medico"] or ""
+                        med_opts_e = [""] + (medicos_all["medico"].tolist() if not medicos_all.empty else []) + ["+ Novo medico..."]
+                        med_idx_e = med_opts_e.index(med_val) if med_val in med_opts_e else 0
+                        e_med_sel = st.selectbox("Medico", med_opts_e, index=med_idx_e, key=f"emedsel_{ag_id}")
+                        e_med = st.text_input("Nome do medico", value=med_val, key=f"em_{ag_id}") if e_med_sel == "+ Novo medico..." else e_med_sel
+                    with ee2:
+                        conv_val = row["convenio"] or ""
+                        conv_opts_e = [""] + (convs_all["convenio"].tolist() if not convs_all.empty else []) + ["+ Novo convenio..."]
+                        conv_idx_e = conv_opts_e.index(conv_val) if conv_val in conv_opts_e else 0
+                        e_conv_sel = st.selectbox("Convenio", conv_opts_e, index=conv_idx_e, key=f"econvsel_{ag_id}")
+                        e_conv = st.text_input("Nome do convenio", value=conv_val, key=f"ec_{ag_id}") if e_conv_sel == "+ Novo convenio..." else e_conv_sel
+
                     with st.form(f"edit_ag_{ag_id}"):
                         ec1, ec2 = st.columns(2)
                         with ec1:
-                            e_pac = st.text_input("Nome", value=row["paciente"] or "", key=f"ep_{ag_id}")
-                            e_conv = st.text_input("Convenio", value=row["convenio"] or "", key=f"ec_{ag_id}")
+                            e_pac = st.text_input("Nome do Paciente", value=row["paciente"] or "", key=f"ep_{ag_id}")
                         with ec2:
-                            e_med = st.text_input("Medico", value=row["medico"] or "", key=f"em_{ag_id}")
                             e_data = st.date_input("Data", value=e_dt, key=f"ed_{ag_id}")
                         e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
 
