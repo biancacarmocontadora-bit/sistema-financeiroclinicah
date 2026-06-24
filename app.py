@@ -1521,7 +1521,10 @@ if page == "Agendamentos":
                 ag_data = st.date_input("Data do Agendamento", value=date.today())
             col3, col4 = st.columns(2)
             with col3:
-                ag_tipo = st.selectbox("Tipo", ["Consulta", "Procedimento", "Raio X"])
+                tipos_cad = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+                tipos_lista = ["Consulta", "Procedimento", "Raio X"] + [t for t in (tipos_cad["tipo_consulta"].tolist() if not tipos_cad.empty else []) if t not in ["Consulta", "Procedimento", "Raio X"]] + ["Outro..."]
+                ag_tipo_sel = st.selectbox("Tipo", tipos_lista)
+                ag_tipo = st.text_input("Especificar tipo", key="ag_tipo_custom") if ag_tipo_sel == "Outro..." else ag_tipo_sel
             with col4:
                 ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
 
@@ -1592,7 +1595,16 @@ if page == "Agendamentos":
                 st.rerun()
 
     with tab_lista:
-        col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+        # Carrega opcoes dos filtros dinamicos (sem depender do periodo)
+        convs_all   = q("SELECT DISTINCT convenio FROM agendamentos WHERE company_id=? AND convenio IS NOT NULL AND convenio != '' ORDER BY convenio", (cid,))
+        medicos_all = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
+        tipos_all   = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+
+        conv_opts   = ["Todos"] + (convs_all["convenio"].tolist()       if not convs_all.empty   else [])
+        medico_opts = ["Todos"] + (medicos_all["medico"].tolist()        if not medicos_all.empty else [])
+        tipo_opts_f = ["Todos"] + (tipos_all["tipo_consulta"].tolist()   if not tipos_all.empty  else [])
+
+        col_f1, col_f2, col_f3, col_f4 = st.columns(4)
         with col_f1:
             f_data_ini = st.date_input("De", value=date.today().replace(day=1), key="ag_ini")
         with col_f2:
@@ -1600,24 +1612,18 @@ if page == "Agendamentos":
         with col_f3:
             f_status = st.selectbox("Status", ["Todos"] + list(STATUS_AG.keys()),
                                     format_func=lambda s: "Todos" if s == "Todos" else STATUS_AG[s][1] + " " + STATUS_AG[s][0])
-
-        col_f4, col_f5, col_f6, col_f7 = st.columns([2, 2, 2, 2])
         with col_f4:
             f_busca = st.text_input("Buscar nome paciente")
+
+        col_f5, col_f6, col_f7 = st.columns(3)
         with col_f5:
-            convs = q("SELECT DISTINCT convenio FROM agendamentos WHERE company_id=? AND convenio IS NOT NULL AND convenio != '' ORDER BY convenio", (cid,))
-            conv_opts = ["Todos"] + convs["convenio"].tolist() if not convs.empty else ["Todos"]
             f_convenio = st.selectbox("Convenio", conv_opts)
         with col_f6:
-            medicos_f = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
-            medico_opts = ["Todos"] + medicos_f["medico"].tolist() if not medicos_f.empty else ["Todos"]
             f_medico = st.selectbox("Profissional / Medico", medico_opts)
         with col_f7:
-            tipos_f = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
-            tipo_opts_f = ["Todos"] + tipos_f["tipo_consulta"].tolist() if not tipos_f.empty else ["Todos"]
-            f_tipo = st.selectbox("Tipo", tipo_opts_f)
+            f_tipo = st.selectbox("Tipo de Atendimento", tipo_opts_f)
 
-        sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND date(data_hora) BETWEEN ? AND ?"
+        sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND substr(data_hora,1,10) BETWEEN ? AND ?"
         params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
         if f_status != "Todos":
             sql_ag += " AND status=?"
@@ -1827,9 +1833,13 @@ if page == "Agendamentos":
                             e_data = st.date_input("Data", value=e_dt, key=f"ed_{ag_id}")
                         ec3, ec4 = st.columns(2)
                         with ec3:
-                            tipo_opts = ["Consulta", "Procedimento", "Raio X"]
-                            tipo_idx = tipo_opts.index(row["tipo_consulta"]) if row["tipo_consulta"] in tipo_opts else 0
-                            e_tipo = st.selectbox("Tipo", tipo_opts, index=tipo_idx, key=f"et_{ag_id}")
+                            tipo_base = ["Consulta", "Procedimento", "Raio X"]
+                            tipos_ex = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+                            tipo_opts = tipo_base + [t for t in (tipos_ex["tipo_consulta"].tolist() if not tipos_ex.empty else []) if t not in tipo_base] + ["Outro..."]
+                            tipo_val = row["tipo_consulta"] or "Consulta"
+                            tipo_idx = tipo_opts.index(tipo_val) if tipo_val in tipo_opts else 0
+                            e_tipo_sel = st.selectbox("Tipo", tipo_opts, index=tipo_idx, key=f"et_{ag_id}")
+                            e_tipo = st.text_input("Especificar tipo", value=tipo_val, key=f"et_custom_{ag_id}") if e_tipo_sel == "Outro..." else e_tipo_sel
                         with ec4:
                             e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
 
