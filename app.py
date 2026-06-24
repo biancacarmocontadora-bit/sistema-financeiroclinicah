@@ -1495,7 +1495,20 @@ if page == "Agendamentos":
         st.subheader("Novo Agendamento")
         FORMAS_AG = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
 
-        # Controle reativo de forma de pagamento fora do form
+        # Campos reativos fora do form
+        tipos_cad = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+        tipos_base = ["Consulta", "Procedimento", "Raio X"]
+        tipos_extras = [t for t in (tipos_cad["tipo_consulta"].tolist() if not tipos_cad.empty else []) if t not in tipos_base]
+        tipos_lista = tipos_base + tipos_extras + ["Outro..."]
+
+        rt1, rt2 = st.columns(2)
+        with rt1:
+            ag_tipo_sel = st.selectbox("Tipo de Atendimento", tipos_lista, key="novo_tipo_sel")
+        with rt2:
+            ag_tipo = st.text_input("Especificar tipo", key="novo_tipo_custom") if ag_tipo_sel == "Outro..." else ag_tipo_sel
+            if ag_tipo_sel != "Outro...":
+                st.empty()
+
         ag_forma_sel = st.selectbox("Forma de Pagamento", FORMAS_AG, key="novo_forma")
         eh_cartao = ag_forma_sel in ("Cartao Debito", "Cartao Credito")
 
@@ -1519,14 +1532,7 @@ if page == "Agendamentos":
             with col2:
                 ag_medico = st.text_input("Medico")
                 ag_data = st.date_input("Data do Agendamento", value=date.today())
-            col3, col4 = st.columns(2)
-            with col3:
-                tipos_cad = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
-                tipos_lista = ["Consulta", "Procedimento", "Raio X"] + [t for t in (tipos_cad["tipo_consulta"].tolist() if not tipos_cad.empty else []) if t not in ["Consulta", "Procedimento", "Raio X"]] + ["Outro..."]
-                ag_tipo_sel = st.selectbox("Tipo", tipos_lista)
-                ag_tipo = st.text_input("Especificar tipo", key="ag_tipo_custom") if ag_tipo_sel == "Outro..." else ag_tipo_sel
-            with col4:
-                ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
+            ag_valor = st.number_input("Valor Bruto (R$)", min_value=0.0, step=0.01, format="%.2f")
 
             # Preview do parcelamento com taxa
             if eh_cartao and ag_valor > 0:
@@ -1800,6 +1806,20 @@ if page == "Agendamentos":
                     except:
                         e_dt = date.today()
 
+                    # Tipo fora do form para ser reativo
+                    tipo_base_e = ["Consulta", "Procedimento", "Raio X"]
+                    tipos_ex_e = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
+                    tipo_opts_e = tipo_base_e + [t for t in (tipos_ex_e["tipo_consulta"].tolist() if not tipos_ex_e.empty else []) if t not in tipo_base_e] + ["Outro..."]
+                    tipo_val_e = row["tipo_consulta"] or "Consulta"
+                    tipo_idx_e = tipo_opts_e.index(tipo_val_e) if tipo_val_e in tipo_opts_e else 0
+                    et1, et2 = st.columns(2)
+                    with et1:
+                        e_tipo_sel = st.selectbox("Tipo de Atendimento", tipo_opts_e, index=tipo_idx_e, key=f"et_{ag_id}")
+                    with et2:
+                        e_tipo = st.text_input("Especificar tipo", value=tipo_val_e, key=f"et_custom_{ag_id}") if e_tipo_sel == "Outro..." else e_tipo_sel
+                        if e_tipo_sel != "Outro...":
+                            st.empty()
+
                     e_forma_sel = st.selectbox(
                         "Forma de Pagamento", FORMAS_AG,
                         index=FORMAS_AG.index(row["forma_pagamento"]) if row["forma_pagamento"] in FORMAS_AG else 0,
@@ -1831,17 +1851,7 @@ if page == "Agendamentos":
                         with ec2:
                             e_med = st.text_input("Medico", value=row["medico"] or "", key=f"em_{ag_id}")
                             e_data = st.date_input("Data", value=e_dt, key=f"ed_{ag_id}")
-                        ec3, ec4 = st.columns(2)
-                        with ec3:
-                            tipo_base = ["Consulta", "Procedimento", "Raio X"]
-                            tipos_ex = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
-                            tipo_opts = tipo_base + [t for t in (tipos_ex["tipo_consulta"].tolist() if not tipos_ex.empty else []) if t not in tipo_base] + ["Outro..."]
-                            tipo_val = row["tipo_consulta"] or "Consulta"
-                            tipo_idx = tipo_opts.index(tipo_val) if tipo_val in tipo_opts else 0
-                            e_tipo_sel = st.selectbox("Tipo", tipo_opts, index=tipo_idx, key=f"et_{ag_id}")
-                            e_tipo = st.text_input("Especificar tipo", value=tipo_val, key=f"et_custom_{ag_id}") if e_tipo_sel == "Outro..." else e_tipo_sel
-                        with ec4:
-                            e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
+                        e_val = st.number_input("Valor Bruto (R$)", value=float(row["valor"] or 0), min_value=0.0, step=0.01, format="%.2f", key=f"ev_{ag_id}")
 
                         if e_eh_cartao and e_val > 0:
                             cf_ep = get_card_fees(cid)
