@@ -1723,6 +1723,26 @@ Funcionalidades:
         """)
         st.markdown("---")
         st.subheader("Zona de Perigo")
+        with st.expander("⚠️ Limpar pagamentos dos agendamentos"):
+            st.warning("Apaga todos os lancamentos financeiros gerados por pagamentos de agendamentos e volta o status deles para 'agendado'. Os agendamentos em si NAO sao apagados.")
+            confirm_pag = st.text_input("Digite CONFIRMAR para prosseguir", key="confirm_limparpag")
+            if st.button("Limpar pagamentos", key="danger_pag"):
+                if confirm_pag == "CONFIRMAR":
+                    # Busca pacientes dos agendamentos realizados
+                    df_ags_real = q("SELECT DISTINCT paciente FROM agendamentos WHERE company_id=? AND status='realizado'", (cid,))
+                    total_del = 0
+                    if not df_ags_real.empty:
+                        for _, r in df_ags_real.iterrows():
+                            pac = r["paciente"]
+                            res = q("SELECT id FROM transactions WHERE company_id=? AND description LIKE ?", (cid, f"%{pac}%"))
+                            for lid in res["id"].tolist():
+                                run("DELETE FROM transactions WHERE id=?", (int(lid),))
+                                total_del += 1
+                    run("UPDATE agendamentos SET status='agendado', forma_pagamento=NULL WHERE company_id=? AND status='realizado'", (cid,))
+                    st.success(f"Removidos {total_del} lancamento(s). Agendamentos voltaram para 'agendado'.")
+                    st.rerun()
+                else:
+                    st.error("Digite CONFIRMAR para prosseguir.")
         with st.expander("Apagar TODOS os lancamentos desta empresa"):
             st.warning("Esta acao e irreversivel!")
             confirm = st.text_input("Digite CONFIRMAR para prosseguir")
