@@ -1984,21 +1984,34 @@ if page == "Agendamentos":
                 with st.expander("💳 Efetuar Pagamento" + (" ✅ Pago" if ja_pago else "")):
                     if ja_pago:
                         st.success("Este agendamento ja foi marcado como realizado.")
-                        # Mostra lançamentos vinculados e permite editar data
+                        # Busca lançamentos pelo grupo ou pela descricao do paciente
+                        desc_busca = row['paciente']
                         df_pag_lc = q("""SELECT id, description, amount, date_competencia, date_caixa, payment_method, status
                                           FROM transactions WHERE company_id=? AND description LIKE ?
                                           ORDER BY date_caixa""",
-                                      (cid, f"%{row['paciente']}%"))
+                                      (cid, f"%{desc_busca}%"))
                         if not df_pag_lc.empty:
                             st.markdown("**Lancamentos registrados:**")
-                            st.dataframe(df_pag_lc[["description","amount","date_competencia","date_caixa","payment_method","status"]]
-                                         .rename(columns={"description":"Descricao","amount":"Valor","date_competencia":"Competencia",
-                                                          "date_caixa":"Data Caixa","payment_method":"Forma","status":"Status"}),
-                                         use_container_width=True, hide_index=True)
+                            # Mostra cada lancamento com botao de excluir
+                            for _, lc in df_pag_lc.iterrows():
+                                lc_id = int(lc["id"])
+                                lc1, lc2, lc3, lc4, lc5, lc6 = st.columns([2,1,1,1,1,1])
+                                lc1.write(lc["description"][:45])
+                                lc2.write(fmt_brl(lc["amount"]))
+                                lc3.write(str(lc["date_competencia"])[:10])
+                                lc4.write(str(lc["date_caixa"])[:10])
+                                lc5.write(lc["payment_method"] or "")
+                                if lc6.button("🗑️", key=f"del_lc_{ag_id}_{lc_id}", help="Excluir este lancamento"):
+                                    run("DELETE FROM transactions WHERE id=?", (lc_id,))
+                                    st.success("Lancamento excluido.")
+                                    st.rerun()
+
+                            st.markdown("---")
+                            # Alterar datas em lote
                             with st.expander("✏️ Alterar data dos lancamentos"):
                                 nova_dt_comp = st.date_input("Nova Data de Competencia", value=date.today(), key=f"edit_dtcomp_{ag_id}")
                                 nova_dt_cx   = st.date_input("Nova Data de Caixa/Recebimento", value=date.today(), key=f"edit_dtcx_{ag_id}")
-                                alterar_todas = st.checkbox("Alterar todos os lancamentos deste agendamento", value=True, key=f"alt_todas_{ag_id}")
+                                alterar_todas = st.checkbox("Alterar todos os lancamentos", value=True, key=f"alt_todas_{ag_id}")
                                 if alterar_todas:
                                     ids_alt = df_pag_lc["id"].tolist()
                                 else:
@@ -2012,6 +2025,18 @@ if page == "Agendamentos":
                                             (nova_dt_comp.strftime("%Y-%m-%d"), nova_dt_cx.strftime("%Y-%m-%d"), lid))
                                     st.success(f"Data atualizada em {len(ids_alt)} lancamento(s).")
                                     st.rerun()
+
+                        # Reabrir pagamento: apaga todos os lancamentos e volta status
+                        st.markdown("---")
+                        with st.expander("↩️ Reabrir pagamento (corrigir tudo)"):
+                            st.warning("Isso exclui TODOS os lancamentos financeiros deste agendamento e volta o status para 'agendado', permitindo refazer o pagamento corretamente.")
+                            if st.button("Confirmar reabertura", key=f"reabrir_{ag_id}", type="primary"):
+                                if not df_pag_lc.empty:
+                                    for lid in df_pag_lc["id"].tolist():
+                                        run("DELETE FROM transactions WHERE id=?", (int(lid),))
+                                run("UPDATE agendamentos SET status='agendado', forma_pagamento=NULL WHERE id=?", (ag_id,))
+                                st.success("Pagamento reaberto. Agora voce pode efetuar o pagamento novamente.")
+                                st.rerun()
                     else:
                         import uuid as _uuid2
                         banks_pag = get_banks(cid)
