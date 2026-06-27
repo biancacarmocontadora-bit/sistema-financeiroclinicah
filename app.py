@@ -128,6 +128,12 @@ def init_db():
                 forma_pagamento TEXT, cartao_bandeira TEXT,
                 cartao_parcelas INTEGER DEFAULT 1, observacao TEXT,
                 criado_em TIMESTAMP DEFAULT NOW())""",
+            """CREATE TABLE IF NOT EXISTS extrato_banco (
+                id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL, bank_id INTEGER,
+                data TEXT NOT NULL, descricao TEXT NOT NULL, valor REAL NOT NULL,
+                tipo TEXT NOT NULL, conciliado INTEGER DEFAULT 0,
+                transaction_id INTEGER, agendamento_id INTEGER,
+                importado_em TIMESTAMP DEFAULT NOW())""",
         ]:
             cur.execute(stmt)
         # Migra colunas de cartao em bancos existentes (Postgres)
@@ -221,6 +227,16 @@ def init_db():
                 observacao TEXT,
                 criado_em TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY(company_id) REFERENCES companies(id));
+            CREATE TABLE IF NOT EXISTS extrato_banco (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL, bank_id INTEGER,
+                data TEXT NOT NULL, descricao TEXT NOT NULL,
+                valor REAL NOT NULL, tipo TEXT NOT NULL,
+                conciliado INTEGER DEFAULT 0,
+                transaction_id INTEGER, agendamento_id INTEGER,
+                importado_em TEXT DEFAULT (datetime('now','localtime')),
+                FOREIGN KEY(company_id) REFERENCES companies(id),
+                FOREIGN KEY(bank_id) REFERENCES banks(id));
         """)
         # Migra colunas de cartao em bancos existentes
         for col, definition in [("cartao_bandeira", "TEXT"), ("cartao_parcelas", "INTEGER DEFAULT 1")]:
@@ -391,6 +407,7 @@ with st.sidebar:
         "Nova Saida",
         "Transferencia",
         "Extrato",
+        "Conciliacao Bancaria",
         "Parcelas Cartao",
         "Fluxo de Caixa",
         "DRE",
@@ -1046,6 +1063,260 @@ elif page == "Extrato":
         st.download_button("Exportar Excel", data=buf.getvalue(),
                            file_name="extrato_{}_{}.xlsx".format(dt_ini, dt_fim),
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+elif page == "Conciliacao Bancaria":
+    st.title("Conciliacao Bancaria")
+
+    banks = get_banks(cid)
+    bank_opts = {r["name"]: int(r["id"]) for _, r in banks.iterrows()} if not banks.empty else {}
+
+    tab_import, tab_conciliar, tab_hist = st.tabs(["📥 Importar Extrato", "🔗 Conciliar", "📋 Historico"])
+
+    # ── TAB 1: IMPORTAR EXTRATO ────────────────────────────────────────────────
+    with tab_import:
+        st.subheader("Importar Extrato Bancario (Excel/CSV)")
+        st.info("O arquivo deve ter colunas: **Data**, **Descricao**, **Valor** (positivo=entrada, negativo=saida) ou colunas **Credito**/**Debito** separadas.")
+
+        col_up1, col_up2 = st.columns(2)
+        with col_up1:
+            banco_imp = st.selectbox("Banco do Extrato", list(bank_opts.keys()), key="imp_banco")
+        with col_up2:
+            arq = st.file_uploader("Arquivo (.xlsx ou .csv)", type=["xlsx", "xls", "csv"], key="imp_arq")
+
+        if arq:
+            try:
+                if arq.name.endswith(".csv"):
+                    df_raw = pd.read_csv(arq, sep=None, engine="python", dtype=str)
+                else:
+                    df_raw = pd.read_excel(arq, dtype=str)
+                st.write("**Preview das primeiras linhas:**")
+                st.dataframe(df_raw.head(5), use_container_width=True)
+
+                st.markdown("**Mapeamento de colunas**")
+                cols_arq = list(df_raw.columns)
+                m1, m2, m3, m4 = st.columns(4)
+                with m1:
+                    col_data = st.selectbox("Coluna Data", cols_arq, key="map_data",
+                        index=next((i for i,c in enumerate(cols_arq) if "data" in c.lower() or "date" in c.lower()), 0))
+                with m2:
+                    col_desc = st.selectbox("Coluna Descricao", cols_arq, key="map_desc",
+                        index=next((i for i,c in enumerate(cols_arq) if "desc" in c.lower() or "hist" in c.lower() or "memo" in c.lower()), min(1, len(cols_arq)-1)))
+                with m3:
+                    col_val = st.selectbox("Coluna Valor (unica)", ["-- nenhuma --"] + cols_arq, key="map_val",
+                        index=next((i+1 for i,c in enumerate(cols_arq) if "valor" in c.lower() or "value" in c.lower() or "amount" in c.lower()), 0))
+                with m4:
+                    col_cred = st.selectbox("Coluna Credito (+)", ["-- nenhuma --"] + cols_arq, key="map_cred",
+                        index=next((i+1 for i,c in enumerate(cols_arq) if "cred" in c.lower() or "entrad" in c.lower()), 0))
+                col_deb = st.selectbox("Coluna Debito (-)", ["-- nenhuma --"] + cols_arq, key="map_deb",
+                    index=next((i+1 for i,c in enumerate(cols_arq) if "deb" in c.lower() or "said" in c.lower()), 0))
+
+                if st.button("Processar e Importar", type="primary", key="btn_imp"):
+                    bank_id_imp = bank_opts.get(banco_imp)
+                    rows_ok, rows_skip = 0, 0
+                    for _, row_r in df_raw.iterrows():
+                        try:
+                            raw_data = str(row_r[col_data]).strip()
+                            raw_desc = str(row_r[col_desc]).strip()
+                            if not raw_data or not raw_desc or raw_data.lower() in ("nan","none",""):
+                                rows_skip += 1
+                                continue
+                            # Parse data
+                            dt_imp = None
+                            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y", "%m/%d/%Y"):
+                                try:
+                                    dt_imp = datetime.strptime(raw_data[:10], fmt).strftime("%Y-%m-%d")
+                                    break
+                                except:
+                                    pass
+                            if not dt_imp:
+                                rows_skip += 1
+                                continue
+                            # Parse valor
+                            if col_val != "-- nenhuma --":
+                                val_str = str(row_r[col_val]).replace("R$","").replace(".","").replace(",",".").replace(" ","")
+                                try:
+                                    valor_imp = float(val_str)
+                                except:
+                                    rows_skip += 1
+                                    continue
+                                tipo_imp = "credito" if valor_imp >= 0 else "debito"
+                                valor_imp = abs(valor_imp)
+                            elif col_cred != "-- nenhuma --" and col_deb != "-- nenhuma --":
+                                def parse_v(s):
+                                    s = str(s).replace("R$","").replace(".","").replace(",",".").replace(" ","")
+                                    try: return abs(float(s))
+                                    except: return 0.0
+                                v_c = parse_v(row_r[col_cred]) if col_cred in row_r else 0.0
+                                v_d = parse_v(row_r[col_deb]) if col_deb in row_r else 0.0
+                                if v_c > 0:
+                                    valor_imp, tipo_imp = v_c, "credito"
+                                elif v_d > 0:
+                                    valor_imp, tipo_imp = v_d, "debito"
+                                else:
+                                    rows_skip += 1
+                                    continue
+                            else:
+                                rows_skip += 1
+                                continue
+
+                            # Verifica duplicata
+                            existe = q("SELECT id FROM extrato_banco WHERE company_id=? AND bank_id=? AND data=? AND descricao=? AND valor=?",
+                                       (cid, bank_id_imp, dt_imp, raw_desc, valor_imp))
+                            if not existe.empty:
+                                rows_skip += 1
+                                continue
+
+                            run("INSERT INTO extrato_banco (company_id, bank_id, data, descricao, valor, tipo) VALUES (?,?,?,?,?,?)",
+                                (cid, bank_id_imp, dt_imp, raw_desc, valor_imp, tipo_imp))
+                            rows_ok += 1
+                        except Exception as e:
+                            rows_skip += 1
+                    st.success(f"Importado: {rows_ok} lancamentos. Ignorados/duplicatas: {rows_skip}.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo: {e}")
+
+    # ── TAB 2: CONCILIAR ──────────────────────────────────────────────────────
+    with tab_conciliar:
+        st.subheader("Conciliar Lancamentos do Extrato")
+
+        cc1, cc2, cc3 = st.columns(3)
+        with cc1:
+            banco_conc = st.selectbox("Banco", list(bank_opts.keys()), key="conc_banco")
+        with cc2:
+            dt_conc_ini = st.date_input("De", value=date.today().replace(day=1), key="conc_ini")
+        with cc3:
+            dt_conc_fim = st.date_input("Ate", value=date.today(), key="conc_fim")
+
+        bank_id_conc = bank_opts.get(banco_conc)
+        df_ext = q("SELECT * FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ? ORDER BY data",
+                   (cid, bank_id_conc, dt_conc_ini.strftime("%Y-%m-%d"), dt_conc_fim.strftime("%Y-%m-%d")))
+
+        if df_ext.empty:
+            st.info("Nenhum lancamento do extrato neste periodo. Importe o extrato primeiro.")
+        else:
+            total_cred = df_ext[df_ext["tipo"]=="credito"]["valor"].sum()
+            total_deb  = df_ext[df_ext["tipo"]=="debito"]["valor"].sum()
+            conc_count = df_ext["conciliado"].sum()
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("Entradas (extrato)", fmt_brl(total_cred))
+            mc2.metric("Saidas (extrato)", fmt_brl(total_deb))
+            mc3.metric("Saldo extrato", fmt_brl(total_cred - total_deb))
+            mc4.metric("Conciliados", f"{int(conc_count)}/{len(df_ext)}")
+
+            st.markdown("---")
+            st.markdown("**Lancamentos pendentes de conciliacao**")
+
+            df_pend = df_ext[df_ext["conciliado"] == 0].copy()
+            if df_pend.empty:
+                st.success("Todos os lancamentos ja foram conciliados!")
+            else:
+                # Carrega agendamentos realizados e transacoes para sugerir vinculo
+                df_ags = q("SELECT id, paciente, data_hora, valor, forma_pagamento FROM agendamentos WHERE company_id=? AND status='realizado'", (cid,))
+                df_txs = q("SELECT id, description, amount, date_caixa, payment_method FROM transactions WHERE company_id=? AND bank_id=?",
+                           (cid, bank_id_conc))
+
+                for _, ext_row in df_pend.iterrows():
+                    ext_id = int(ext_row["id"])
+                    sinal = "🟢" if ext_row["tipo"] == "credito" else "🔴"
+                    with st.expander(f"{sinal} {ext_row['data']} | {ext_row['descricao'][:60]} | {fmt_brl(ext_row['valor'])}"):
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            st.write(f"**Data:** {ext_row['data']}")
+                            st.write(f"**Descricao:** {ext_row['descricao']}")
+                            st.write(f"**Valor:** {fmt_brl(ext_row['valor'])} ({ext_row['tipo']})")
+
+                        with ec2:
+                            # Sugestoes automaticas por valor e data proxima
+                            sugestoes_ag = []
+                            if not df_ags.empty:
+                                for _, ag in df_ags.iterrows():
+                                    if abs(float(ag["valor"] or 0) - float(ext_row["valor"])) < 0.02:
+                                        ag_date = str(ag["data_hora"])[:10]
+                                        sugestoes_ag.append(f"#{int(ag['id'])} {ag['paciente']} {ag_date} {fmt_brl(ag['valor'])}")
+
+                            sugestoes_tx = []
+                            if not df_txs.empty:
+                                for _, tx in df_txs.iterrows():
+                                    if abs(float(tx["amount"] or 0) - float(ext_row["valor"])) < 0.02:
+                                        sugestoes_tx.append(f"#{int(tx['id'])} {str(tx['description'])[:40]} {fmt_brl(tx['amount'])}")
+
+                            vincular_tipo = st.radio("Vincular a:", ["Agendamento", "Lancamento Financeiro", "Nao vincular"],
+                                                     horizontal=True, key=f"vt_{ext_id}")
+
+                            if vincular_tipo == "Agendamento" and not df_ags.empty:
+                                ag_opts = ["-- selecionar --"] + [f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) {fmt_brl(r['valor'])}"
+                                                                    for _, r in df_ags.iterrows()]
+                                if sugestoes_ag:
+                                    st.caption(f"Sugestoes por valor: {', '.join(sugestoes_ag[:3])}")
+                                ag_sel = st.selectbox("Agendamento", ag_opts, key=f"ag_sel_{ext_id}")
+                                ag_id_v = None if ag_sel == "-- selecionar --" else int(ag_sel.split("#")[1].split(" ")[0])
+                            elif vincular_tipo == "Lancamento Financeiro" and not df_txs.empty:
+                                tx_opts = ["-- selecionar --"] + [f"#{int(r['id'])} {str(r['description'])[:40]} {fmt_brl(r['amount'])}"
+                                                                    for _, r in df_txs.iterrows()]
+                                if sugestoes_tx:
+                                    st.caption(f"Sugestoes por valor: {', '.join(sugestoes_tx[:3])}")
+                                tx_sel = st.selectbox("Lancamento", tx_opts, key=f"tx_sel_{ext_id}")
+                                tx_id_v = None if tx_sel == "-- selecionar --" else int(tx_sel.split("#")[1].split(" ")[0])
+                            else:
+                                ag_id_v = None
+                                tx_id_v = None
+
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            if st.button("✅ Marcar Conciliado", key=f"conc_{ext_id}"):
+                                ag_v  = ag_id_v  if vincular_tipo == "Agendamento" else None
+                                tx_v  = tx_id_v  if vincular_tipo == "Lancamento Financeiro" else None
+                                run("UPDATE extrato_banco SET conciliado=1, agendamento_id=?, transaction_id=? WHERE id=?",
+                                    (ag_v, tx_v, ext_id))
+                                st.success("Conciliado!")
+                                st.rerun()
+                        with col_btn2:
+                            if st.button("🗑️ Excluir lancamento", key=f"del_ext_{ext_id}"):
+                                run("DELETE FROM extrato_banco WHERE id=?", (ext_id,))
+                                st.rerun()
+
+    # ── TAB 3: HISTORICO ──────────────────────────────────────────────────────
+    with tab_hist:
+        st.subheader("Historico do Extrato Importado")
+        ch1, ch2, ch3 = st.columns(3)
+        with ch1:
+            banco_hist = st.selectbox("Banco", list(bank_opts.keys()), key="hist_banco")
+        with ch2:
+            dt_hist_ini = st.date_input("De", value=date.today().replace(day=1), key="hist_ini")
+        with ch3:
+            dt_hist_fim = st.date_input("Ate", value=date.today(), key="hist_fim")
+
+        bank_id_hist = bank_opts.get(banco_hist)
+        df_hist = q("SELECT * FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ? ORDER BY data DESC",
+                    (cid, bank_id_hist, dt_hist_ini.strftime("%Y-%m-%d"), dt_hist_fim.strftime("%Y-%m-%d")))
+
+        if not df_hist.empty:
+            df_show = df_hist.copy()
+            df_show["Status"] = df_show["conciliado"].apply(lambda x: "✅ Conciliado" if x else "⏳ Pendente")
+            df_show["Tipo"] = df_show["tipo"].apply(lambda x: "➕ Entrada" if x == "credito" else "➖ Saida")
+            df_show["Valor (R$)"] = df_show["valor"].apply(fmt_brl)
+            st.dataframe(df_show[["data","descricao","Tipo","Valor (R$)","Status"]].rename(columns={"data":"Data","descricao":"Descricao"}),
+                         use_container_width=True, hide_index=True)
+
+            # Exportar
+            buf_h = io.BytesIO()
+            with pd.ExcelWriter(buf_h, engine="openpyxl") as wr:
+                df_show[["data","descricao","tipo","valor","Status"]].to_excel(wr, index=False, sheet_name="Extrato")
+            st.download_button("Exportar Excel", data=buf_h.getvalue(),
+                               file_name=f"extrato_conciliacao_{dt_hist_ini}_{dt_hist_fim}.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+            # Limpar extrato do periodo
+            with st.expander("⚠️ Limpar extrato importado"):
+                st.warning("Isso remove TODOS os lancamentos do extrato do periodo selecionado (conciliados e pendentes).")
+                if st.button("Confirmar Limpeza", key="limpar_hist"):
+                    run("DELETE FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?",
+                        (cid, bank_id_hist, dt_hist_ini.strftime("%Y-%m-%d"), dt_hist_fim.strftime("%Y-%m-%d")))
+                    st.success("Extrato limpo.")
+                    st.rerun()
+        else:
+            st.info("Nenhum lancamento importado neste periodo.")
 
 elif page == "Parcelas Cartao":
     st.title("Parcelas de Cartao de Credito")
