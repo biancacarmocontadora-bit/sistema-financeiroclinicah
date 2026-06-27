@@ -1785,7 +1785,7 @@ if page == "Agendamentos":
 
     with tab_novo:
         st.subheader("Novo Agendamento")
-        FORMAS_AG = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+        FORMAS_AG = ["Dinheiro", "PIX", "Debito", "Credito", "Convenio", "Cheque"]
 
         # Carrega listas do banco para selectboxes reativos
         tipos_cad  = q("SELECT DISTINCT tipo_consulta FROM agendamentos WHERE company_id=? AND tipo_consulta IS NOT NULL AND tipo_consulta != '' ORDER BY tipo_consulta", (cid,))
@@ -1814,15 +1814,10 @@ if page == "Agendamentos":
         with rn4:
             ag_forma_sel = st.selectbox("Forma de Pagamento", FORMAS_AG, key="novo_forma")
 
-        eh_cartao = ag_forma_sel in ("Cartao Debito", "Cartao Credito")
+        eh_cartao = ag_forma_sel in ("Debito", "Credito")
         if eh_cartao:
-            cf_novo = get_card_fees(cid)
-            bandeiras_disp = sorted(cf_novo["card_type"].unique().tolist()) if not cf_novo.empty else []
-            col_b, col_p = st.columns(2)
-            with col_b:
-                ag_bandeira = st.selectbox("Bandeira / Tipo do Cartao", bandeiras_disp if bandeiras_disp else ["credito_vista"], key="novo_band")
-            with col_p:
-                ag_parcelas = st.number_input("Numero de Parcelas", min_value=1, max_value=12, value=1, step=1, key="novo_parc") if ag_forma_sel == "Cartao Credito" else 1
+            ag_parcelas = st.number_input("Numero de Parcelas", min_value=1, max_value=12, value=1, step=1, key="novo_parc") if ag_forma_sel == "Credito" else 1
+            ag_bandeira = ag_forma_sel.lower()
         else:
             ag_bandeira = None
             ag_parcelas = 1
@@ -1841,7 +1836,7 @@ if page == "Agendamentos":
                 fee_row = find_card_fee(cf_novo, ag_bandeira or "")
                 taxa_pct = float(fee_row.iloc[0]["fee_percent"]) if not fee_row.empty else 0.0
                 dias_rep = int(fee_row.iloc[0]["days_to_receive"]) if not fee_row.empty else 30
-                n_parc = int(ag_parcelas) if ag_forma_sel == "Cartao Credito" else 1
+                n_parc = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
                 valor_taxa = round(ag_valor * taxa_pct / 100, 2)
                 valor_liq = round(ag_valor - valor_taxa, 2)
                 liq_parcela = round(valor_liq / n_parc, 2)
@@ -1876,13 +1871,13 @@ if page == "Agendamentos":
                     fee_r = find_card_fee(cf_s, ag_bandeira or "")
                     taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
                     dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
-                    n_s = int(ag_parcelas) if ag_forma_sel == "Cartao Credito" else 1
+                    n_s = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
                     valor_liq_s = round(ag_valor - ag_valor * taxa_s / 100, 2)
                     liq_p_s = round(valor_liq_s / n_s, 2)
                     grupo = str(_uuid.uuid4())[:8]
                     data_base = ag_data
                     for i in range(1, n_s + 1):
-                        if ag_forma_sel == "Cartao Debito":
+                        if ag_forma_sel == "Debito":
                             dt_caixa = (data_base + timedelta(days=dias_s)).strftime("%Y-%m-%d")
                         else:
                             dt_caixa = (data_base + timedelta(days=dias_s * i)).strftime("%Y-%m-%d")
@@ -1892,7 +1887,7 @@ if page == "Agendamentos":
                              status, installment_group, installment_num, installment_total, notes)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                             (cid, "receita",
-                             f"{ag_tipo} - {ag_paciente.strip()} ({ag_bandeira} {i}/{n_s})",
+                             f"{ag_tipo} - {ag_paciente.strip()} ({ag_forma_sel} {i}/{n_s})",
                              liq_p_s,
                              ag_data.strftime("%Y-%m-%d"), dt_caixa,
                              ag_forma_sel, "pendente",
@@ -1977,7 +1972,7 @@ if page == "Agendamentos":
             h7.markdown("**Status**")
             st.markdown("---")
 
-            FORMAS_AG = ["", "Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+            FORMAS_AG = ["", "Dinheiro", "PIX", "Debito", "Credito", "Convenio", "Cheque"]
 
             for _, row in df_ag.iterrows():
                 ag_id = int(row["id"])
@@ -2062,11 +2057,10 @@ if page == "Agendamentos":
                         import uuid as _uuid2
                         banks_pag = get_banks(cid)
                         bank_opts_pag = {r["name"]: int(r["id"]) for _, r in banks_pag.iterrows()} if not banks_pag.empty else {}
-                        formas_pag = ["Dinheiro", "PIX", "Cartao Debito", "Cartao Credito", "Convenio", "Cheque"]
+                        formas_pag = ["Dinheiro", "PIX", "Debito", "Credito", "Convenio", "Cheque"]
                         bank_list = list(bank_opts_pag.keys())
                         valor_total_ag = float(row["valor"] or 0)
                         cf_pag_all = get_card_fees(cid)
-                        band_opts_pag = sorted(cf_pag_all["card_type"].unique().tolist()) if not cf_pag_all.empty else ["credito_vista"]
 
                         p_data = st.date_input("Data do Pagamento", value=date.today(), key=f"pd_{ag_id}")
                         n_formas = st.radio("Numero de formas de pagamento", [1, 2, 3], horizontal=True, key=f"nf_{ag_id}")
@@ -2087,17 +2081,14 @@ if page == "Agendamentos":
                             with fc3:
                                 f_banco = st.selectbox("Banco", bank_list, key=f"pb_{ag_id}_{idx_f}") if bank_list else None
 
-                            eh_c = f_sel in ("Cartao Debito", "Cartao Credito")
+                            eh_c = f_sel in ("Debito", "Credito")
                             if eh_c:
-                                cb1, cb2 = st.columns(2)
-                                with cb1:
-                                    f_band = st.selectbox("Bandeira", band_opts_pag, key=f"pband_{ag_id}_{idx_f}")
-                                with cb2:
-                                    f_parc = st.number_input("Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"pparc_{ag_id}_{idx_f}") if f_sel == "Cartao Credito" else 1
+                                f_band = f_sel.lower()
+                                f_parc = st.number_input("Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"pparc_{ag_id}_{idx_f}") if f_sel == "Credito" else 1
                                 fee_p = find_card_fee(cf_pag_all, f_band)
                                 taxa_p = float(fee_p.iloc[0]["fee_percent"]) if not fee_p.empty else 0.0
                                 dias_p = int(fee_p.iloc[0]["days_to_receive"]) if not fee_p.empty else 30
-                                n_p = int(f_parc) if f_sel == "Cartao Credito" else 1
+                                n_p = int(f_parc) if f_sel == "Credito" else 1
                                 liq_p = round(f_val - f_val * taxa_p / 100, 2)
                                 st.info(f"Taxa: {taxa_p:.2f}% | Liquido: {fmt_brl(liq_p)} | {n_p}x de {fmt_brl(round(liq_p/n_p,2))} (~{dias_p} dias)")
                             else:
@@ -2125,14 +2116,14 @@ if page == "Agendamentos":
                                 if f_val <= 0:
                                     continue
                                 bank_id_pag = bank_opts_pag.get(f_banco) if f_banco else None
-                                eh_c2 = f_sel in ("Cartao Debito", "Cartao Credito")
+                                eh_c2 = f_sel in ("Debito", "Credito")
                                 if eh_c2:
-                                    n_p2 = int(f_parc) if f_sel == "Cartao Credito" else 1
+                                    n_p2 = int(f_parc) if f_sel == "Credito" else 1
                                     liq2 = round(f_val - f_val * taxa_p / 100, 2)
                                     liq_p2 = round(liq2 / n_p2, 2)
                                     grupo2 = str(_uuid2.uuid4())[:8]
                                     for i in range(1, n_p2 + 1):
-                                        dt_cx = (p_data + timedelta(days=dias_p if f_sel == "Cartao Debito" else dias_p * i)).strftime("%Y-%m-%d")
+                                        dt_cx = (p_data + timedelta(days=dias_p if f_sel == "Debito" else dias_p * i)).strftime("%Y-%m-%d")
                                         run("""INSERT INTO transactions
                                             (company_id, bank_id, type, description, amount,
                                              date_competencia, date_caixa, payment_method,
@@ -2185,20 +2176,13 @@ if page == "Agendamentos":
                         index=FORMAS_AG.index(row["forma_pagamento"]) if row["forma_pagamento"] in FORMAS_AG else 0,
                         key=f"ef_{ag_id}"
                     )
-                    e_eh_cartao = e_forma_sel in ("Cartao Debito", "Cartao Credito")
+                    e_eh_cartao = e_forma_sel in ("Debito", "Credito")
 
                     if e_eh_cartao:
-                        cf_edit = get_card_fees(cid)
-                        bandeiras_edit = sorted(cf_edit["card_type"].unique().tolist()) if not cf_edit.empty else []
-                        eb1, ep1 = st.columns(2)
-                        with eb1:
-                            band_atual = row.get("cartao_bandeira") or (bandeiras_edit[0] if bandeiras_edit else "")
-                            band_idx = bandeiras_edit.index(band_atual) if band_atual in bandeiras_edit else 0
-                            e_bandeira = st.selectbox("Bandeira / Tipo", bandeiras_edit if bandeiras_edit else ["credito_vista"], index=band_idx, key=f"eband_{ag_id}")
-                        with ep1:
-                            e_parcelas = st.number_input("Parcelas", min_value=1, max_value=12,
-                                                          value=int(row.get("cartao_parcelas") or 1),
-                                                          step=1, key=f"epapc_{ag_id}") if e_forma_sel == "Cartao Credito" else 1
+                        e_bandeira = e_forma_sel.lower()
+                        e_parcelas = st.number_input("Parcelas", min_value=1, max_value=12,
+                                                      value=int(row.get("cartao_parcelas") or 1),
+                                                      step=1, key=f"epapc_{ag_id}") if e_forma_sel == "Credito" else 1
                     else:
                         e_bandeira = None
                         e_parcelas = 1
@@ -2231,7 +2215,7 @@ if page == "Agendamentos":
                             fee_ep = find_card_fee(cf_ep, e_bandeira or "")
                             taxa_ep = float(fee_ep.iloc[0]["fee_percent"]) if not fee_ep.empty else 0.0
                             dias_ep = int(fee_ep.iloc[0]["days_to_receive"]) if not fee_ep.empty else 30
-                            n_ep = int(e_parcelas) if e_forma_sel == "Cartao Credito" else 1
+                            n_ep = int(e_parcelas) if e_forma_sel == "Credito" else 1
                             vl_ep = round(e_val - e_val * taxa_ep / 100, 2)
                             st.info(f"Taxa: {taxa_ep:.2f}% | Liquido: {fmt_brl(vl_ep)} | {n_ep}x de {fmt_brl(round(vl_ep/n_ep,2))} (~{dias_ep} dias)")
 
