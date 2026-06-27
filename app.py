@@ -1984,6 +1984,34 @@ if page == "Agendamentos":
                 with st.expander("💳 Efetuar Pagamento" + (" ✅ Pago" if ja_pago else "")):
                     if ja_pago:
                         st.success("Este agendamento ja foi marcado como realizado.")
+                        # Mostra lançamentos vinculados e permite editar data
+                        df_pag_lc = q("""SELECT id, description, amount, date_competencia, date_caixa, payment_method, status
+                                          FROM transactions WHERE company_id=? AND description LIKE ?
+                                          ORDER BY date_caixa""",
+                                      (cid, f"%{row['paciente']}%"))
+                        if not df_pag_lc.empty:
+                            st.markdown("**Lancamentos registrados:**")
+                            st.dataframe(df_pag_lc[["description","amount","date_competencia","date_caixa","payment_method","status"]]
+                                         .rename(columns={"description":"Descricao","amount":"Valor","date_competencia":"Competencia",
+                                                          "date_caixa":"Data Caixa","payment_method":"Forma","status":"Status"}),
+                                         use_container_width=True, hide_index=True)
+                            with st.expander("✏️ Alterar data dos lancamentos"):
+                                nova_dt_comp = st.date_input("Nova Data de Competencia", value=date.today(), key=f"edit_dtcomp_{ag_id}")
+                                nova_dt_cx   = st.date_input("Nova Data de Caixa/Recebimento", value=date.today(), key=f"edit_dtcx_{ag_id}")
+                                alterar_todas = st.checkbox("Alterar todos os lancamentos deste agendamento", value=True, key=f"alt_todas_{ag_id}")
+                                if alterar_todas:
+                                    ids_alt = df_pag_lc["id"].tolist()
+                                else:
+                                    opts_lc = {f"#{int(r['id'])} {r['description'][:40]} {fmt_brl(r['amount'])}": int(r["id"])
+                                               for _, r in df_pag_lc.iterrows()}
+                                    sel_lc = st.multiselect("Selecionar lancamentos", list(opts_lc.keys()), key=f"sel_lc_{ag_id}")
+                                    ids_alt = [opts_lc[s] for s in sel_lc]
+                                if st.button("Salvar novas datas", key=f"salvar_dt_{ag_id}") and ids_alt:
+                                    for lid in ids_alt:
+                                        run("UPDATE transactions SET date_competencia=?, date_caixa=? WHERE id=?",
+                                            (nova_dt_comp.strftime("%Y-%m-%d"), nova_dt_cx.strftime("%Y-%m-%d"), lid))
+                                    st.success(f"Data atualizada em {len(ids_alt)} lancamento(s).")
+                                    st.rerun()
                     else:
                         import uuid as _uuid2
                         banks_pag = get_banks(cid)
