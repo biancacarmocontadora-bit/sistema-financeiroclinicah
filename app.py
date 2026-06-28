@@ -1781,6 +1781,9 @@ if page == "Agendamentos":
         "cancelado":  ("Cancelado",  "⚫"),
     }
 
+    if st.session_state.get("ag_salvo_msg"):
+        st.success(st.session_state.pop("ag_salvo_msg"))
+
     tab_lista, tab_novo, tab_import = st.tabs(["Lista de Agendamentos", "Novo Agendamento", "Importar Planilha"])
 
     with tab_novo:
@@ -1855,46 +1858,52 @@ if page == "Agendamentos":
             if not ag_paciente.strip():
                 st.error("Informe o nome do paciente.")
             else:
-                data_hora_str = ag_data.strftime("%Y-%m-%d") + " 08:00"
-                run("""INSERT INTO agendamentos
-                    (company_id, paciente, medico, data_hora, status, convenio,
-                     tipo_consulta, valor, forma_pagamento, cartao_bandeira, cartao_parcelas)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                    (cid, ag_paciente.strip(), ag_medico.strip(),
-                     data_hora_str, ag_status, ag_convenio.strip(),
-                     ag_tipo, ag_valor, ag_forma_sel, ag_bandeira, int(ag_parcelas)))
+                try:
+                    data_hora_str = ag_data.strftime("%Y-%m-%d") + " 08:00"
+                    med_val  = (ag_medico   or "").strip()
+                    conv_val = (ag_convenio or "").strip()
+                    run("""INSERT INTO agendamentos
+                        (company_id, paciente, medico, data_hora, status, convenio,
+                         tipo_consulta, valor, forma_pagamento, cartao_bandeira, cartao_parcelas)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                        (cid, ag_paciente.strip(), med_val,
+                         data_hora_str, ag_status, conv_val,
+                         ag_tipo, ag_valor, ag_forma_sel, ag_bandeira, int(ag_parcelas)))
 
-                # Lanca parcelas no financeiro se pagamento em cartao
-                if eh_cartao and ag_valor > 0:
-                    import uuid as _uuid
-                    cf_s = get_card_fees(cid)
-                    fee_r = find_card_fee(cf_s, ag_bandeira or "")
-                    taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
-                    dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
-                    n_s = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
-                    valor_liq_s = round(ag_valor - ag_valor * taxa_s / 100, 2)
-                    liq_p_s = round(valor_liq_s / n_s, 2)
-                    grupo = str(_uuid.uuid4())[:8]
-                    data_base = ag_data
-                    for i in range(1, n_s + 1):
-                        if ag_forma_sel == "Debito":
-                            dt_caixa = (data_base + timedelta(days=dias_s)).strftime("%Y-%m-%d")
-                        else:
-                            dt_caixa = (data_base + timedelta(days=dias_s * i)).strftime("%Y-%m-%d")
-                        run("""INSERT INTO transactions
-                            (company_id, type, description, amount,
-                             date_competencia, date_caixa, payment_method,
-                             status, installment_group, installment_num, installment_total, notes)
-                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                            (cid, "receita",
-                             f"{ag_tipo} - {ag_paciente.strip()} ({ag_forma_sel} {i}/{n_s})",
-                             liq_p_s,
-                             ag_data.strftime("%Y-%m-%d"), dt_caixa,
-                             ag_forma_sel, "pendente",
-                             grupo, i, n_s,
-                             f"Taxa {taxa_s:.2f}% aplicada. Bruto: {fmt_brl(ag_valor)}"))
-                st.success(f"Agendamento de **{ag_paciente}** salvo!")
-                st.rerun()
+                    # Lanca parcelas no financeiro se pagamento em cartao
+                    if eh_cartao and ag_valor > 0:
+                        import uuid as _uuid
+                        cf_s = get_card_fees(cid)
+                        fee_r = find_card_fee(cf_s, ag_bandeira or "")
+                        taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
+                        dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
+                        n_s = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
+                        valor_liq_s = round(ag_valor - ag_valor * taxa_s / 100, 2)
+                        liq_p_s = round(valor_liq_s / n_s, 2)
+                        grupo = str(_uuid.uuid4())[:8]
+                        data_base = ag_data
+                        for i in range(1, n_s + 1):
+                            if ag_forma_sel == "Debito":
+                                dt_caixa = (data_base + timedelta(days=dias_s)).strftime("%Y-%m-%d")
+                            else:
+                                dt_caixa = (data_base + timedelta(days=dias_s * i)).strftime("%Y-%m-%d")
+                            run("""INSERT INTO transactions
+                                (company_id, type, description, amount,
+                                 date_competencia, date_caixa, payment_method,
+                                 status, installment_group, installment_num, installment_total, notes)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (cid, "receita",
+                                 f"{ag_tipo} - {ag_paciente.strip()} ({ag_forma_sel} {i}/{n_s})",
+                                 liq_p_s,
+                                 ag_data.strftime("%Y-%m-%d"), dt_caixa,
+                                 ag_forma_sel, "pendente",
+                                 grupo, i, n_s,
+                                 f"Taxa {taxa_s:.2f}% aplicada. Bruto: {fmt_brl(ag_valor)}"))
+
+                    st.session_state["ag_salvo_msg"] = f"Agendamento de {ag_paciente.strip()} salvo com sucesso!"
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
     with tab_lista:
         # Carrega opcoes dos filtros dinamicos (sem depender do periodo)
