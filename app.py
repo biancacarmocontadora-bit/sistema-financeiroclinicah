@@ -1910,7 +1910,7 @@ if page == "Agendamentos":
         with col_f1:
             f_data_ini = st.date_input("De", value=date.today().replace(day=1), key="ag_ini")
         with col_f2:
-            f_data_fim = st.date_input("Ate", value=date.today(), key="ag_fim")
+            f_data_fim = st.date_input("Ate", value=date.today() + timedelta(days=60), key="ag_fim")
         with col_f3:
             f_status = st.selectbox("Status", ["Todos"] + list(STATUS_AG.keys()),
                                     format_func=lambda s: "Todos" if s == "Todos" else STATUS_AG[s][1] + " " + STATUS_AG[s][0])
