@@ -2119,6 +2119,10 @@ if page == "Agendamentos":
 
                         if confirmar_pag:
                             formas_salvas = []
+                            rows_tx = []  # acumula todos os inserts para fazer de uma vez
+                            desc_base = f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']}"
+                            dt_comp = p_data.strftime("%Y-%m-%d")
+
                             for f_sel, f_val, f_banco, f_band, f_parc, taxa_p, dias_p in pagamentos_config:
                                 if f_val <= 0:
                                     continue
@@ -2126,31 +2130,31 @@ if page == "Agendamentos":
                                 eh_c2 = f_sel in ("Debito", "Credito")
                                 if eh_c2:
                                     n_p2 = int(f_parc) if f_sel == "Credito" else 1
-                                    liq2 = round(f_val - f_val * taxa_p / 100, 2)
+                                    liq2  = round(f_val - f_val * taxa_p / 100, 2)
                                     liq_p2 = round(liq2 / n_p2, 2)
                                     grupo2 = str(_uuid2.uuid4())[:8]
                                     for i in range(1, n_p2 + 1):
                                         dt_cx = (p_data + timedelta(days=dias_p if f_sel == "Debito" else dias_p * i)).strftime("%Y-%m-%d")
-                                        run("""INSERT INTO transactions
-                                            (company_id, bank_id, type, description, amount,
-                                             date_competencia, date_caixa, payment_method,
-                                             status, installment_group, installment_num, installment_total, notes)
-                                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                                            (cid, bank_id_pag, "receita",
-                                             f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']} ({f_sel} {i}/{n_p2})",
-                                             liq_p2, p_data.strftime("%Y-%m-%d"), dt_cx,
-                                             f_sel, "pendente", grupo2, i, n_p2,
-                                             p_obs or f"Taxa {taxa_p:.2f}%. Bruto: {fmt_brl(f_val)}"))
+                                        rows_tx.append((cid, bank_id_pag, "receita",
+                                            f"{desc_base} ({f_sel} {i}/{n_p2})",
+                                            liq_p2, dt_comp, dt_cx, f_sel, "pendente",
+                                            grupo2, i, n_p2,
+                                            p_obs or f"Taxa {taxa_p:.2f}%. Bruto: {fmt_brl(f_val)}"))
                                 else:
-                                    run("""INSERT INTO transactions
-                                        (company_id, bank_id, type, description, amount,
-                                         date_competencia, date_caixa, payment_method, status, notes)
-                                        VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                                        (cid, bank_id_pag, "receita",
-                                         f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']} ({f_sel})",
-                                         f_val, p_data.strftime("%Y-%m-%d"), p_data.strftime("%Y-%m-%d"),
-                                         f_sel, "pago", p_obs or ""))
+                                    rows_tx.append((cid, bank_id_pag, "receita",
+                                        f"{desc_base} ({f_sel})",
+                                        f_val, dt_comp, dt_comp, f_sel, "pago",
+                                        None, None, None,
+                                        p_obs or ""))
                                 formas_salvas.append(f_sel)
+
+                            # Um único round-trip ao banco para todos os lançamentos
+                            if rows_tx:
+                                run_many("""INSERT INTO transactions
+                                    (company_id, bank_id, type, description, amount,
+                                     date_competencia, date_caixa, payment_method, status,
+                                     installment_group, installment_num, installment_total, notes)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
 
                             formas_str = " + ".join(formas_salvas)
                             run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
