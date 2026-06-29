@@ -79,7 +79,6 @@ def run(sql, params=()):
         conn.execute(sql, params)
         conn.commit()
     conn.close()
-    st.cache_data.clear()
 
 def run_many(sql, data):
     conn = get_conn()
@@ -92,7 +91,6 @@ def run_many(sql, data):
         conn.executemany(sql, data)
         conn.commit()
     conn.close()
-    st.cache_data.clear()
 
 def init_db():
     conn = get_conn()
@@ -355,29 +353,29 @@ def fmt_brl(v):
     except:
         return "R$ 0,00"
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def get_companies():
     return q("SELECT * FROM companies WHERE active=1 ORDER BY name")
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def get_banks(company_id):
     return q("SELECT * FROM banks WHERE company_id=? AND active=1 ORDER BY name", (company_id,))
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def get_professionals(company_id):
     return q("SELECT * FROM professionals WHERE company_id=? AND active=1 ORDER BY name", (company_id,))
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def get_categories(company_id, type_filter=None):
     if type_filter:
         return q("SELECT * FROM categories WHERE company_id=? AND type=? AND active=1 ORDER BY name", (company_id, type_filter))
     return q("SELECT * FROM categories WHERE company_id=? AND active=1 ORDER BY name", (company_id,))
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=120)
 def get_card_fees(company_id):
     return q("SELECT * FROM card_fees WHERE company_id=? ORDER BY installments", (company_id,))
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def get_balance(company_id, bank_id=None, up_to_date=None):
     if up_to_date is None:
         up_to_date = date.today().strftime("%Y-%m-%d")
