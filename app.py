@@ -319,33 +319,35 @@ def get_installments_from_method(payment_method):
             return int(p)
     return 1
 
-def find_card_fee(card_fees_df, payment_method):
-    """Busca taxa de cartao compativel com o metodo de pagamento."""
+def find_card_fee(card_fees_df, payment_method, n_parcelas=1):
+    """Busca taxa de cartao pelo tipo (credito/debito) e numero de parcelas."""
     if card_fees_df.empty:
         return pd.DataFrame()
-    pm = payment_method.lower()
-    inst = get_installments_from_method(pm)
-    # 1) Busca exata
-    match = card_fees_df[card_fees_df["card_type"].str.lower() == pm]
-    if not match.empty:
-        return match.head(1)
-    # 2) Busca pela primeira palavra do card_type dentro do payment_method + parcelas corretas
-    match2 = card_fees_df[
-        card_fees_df.apply(lambda r: r["card_type"].lower().split()[0] in pm, axis=1) &
-        (card_fees_df["installments"] == inst)
-    ]
-    if not match2.empty:
-        return match2.head(1)
-    # 3) Fallback: primeira palavra do card_type dentro do payment_method (qualquer parcela)
-    match3 = card_fees_df[
-        card_fees_df.apply(lambda r: r["card_type"].lower().split()[0] in pm, axis=1)
-    ]
-    if not match3.empty:
-        inst_match = match3[match3["installments"] == inst]
-        if not inst_match.empty:
-            return inst_match.head(1)
-        return match3.head(1)
-    return pd.DataFrame()
+    pm = payment_method.lower().strip()
+    # Determina se e credito ou debito
+    eh_debito  = pm in ("debito", "cartao debito")
+    eh_credito = pm in ("credito", "cartao credito") or "credito" in pm
+
+    # Filtra linhas do tipo correto (card_type contem "debito" ou "credito")
+    if eh_debito:
+        subset = card_fees_df[card_fees_df["card_type"].str.lower().str.contains("debito")]
+    elif eh_credito:
+        subset = card_fees_df[card_fees_df["card_type"].str.lower().str.contains("credito")]
+    else:
+        subset = card_fees_df
+
+    if subset.empty:
+        return pd.DataFrame()
+
+    # Tenta achar a taxa com o numero exato de parcelas
+    exact = subset[subset["installments"] == int(n_parcelas)]
+    if not exact.empty:
+        return exact.head(1)
+
+    # Fallback: taxa com mais parcelas proximas (menor diferenca)
+    subset = subset.copy()
+    subset["_diff"] = (subset["installments"] - int(n_parcelas)).abs()
+    return subset.sort_values("_diff").head(1)
 
 def fmt_brl(v):
     try:
@@ -1871,10 +1873,10 @@ if page == "Agendamentos":
             # Preview do parcelamento com taxa
             if eh_cartao and ag_valor > 0:
                 cf_novo = get_card_fees(cid)
-                fee_row = find_card_fee(cf_novo, ag_bandeira or "")
+                n_parc = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
+                fee_row = find_card_fee(cf_novo, ag_bandeira or "", n_parc)
                 taxa_pct = float(fee_row.iloc[0]["fee_percent"]) if not fee_row.empty else 0.0
                 dias_rep = int(fee_row.iloc[0]["days_to_receive"]) if not fee_row.empty else 30
-                n_parc = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
                 valor_taxa = round(ag_valor * taxa_pct / 100, 2)
                 valor_liq = round(ag_valor - valor_taxa, 2)
                 liq_parcela = round(valor_liq / n_parc, 2)
@@ -1909,10 +1911,10 @@ if page == "Agendamentos":
                     if eh_cartao and ag_valor > 0:
                         import uuid as _uuid
                         cf_s = get_card_fees(cid)
-                        fee_r = find_card_fee(cf_s, ag_bandeira or "")
+                        n_s = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
+                        fee_r = find_card_fee(cf_s, ag_bandeira or "", n_s)
                         taxa_s = float(fee_r.iloc[0]["fee_percent"]) if not fee_r.empty else 0.0
                         dias_s = int(fee_r.iloc[0]["days_to_receive"]) if not fee_r.empty else 30
-                        n_s = int(ag_parcelas) if ag_forma_sel == "Credito" else 1
                         valor_liq_s = round(ag_valor - ag_valor * taxa_s / 100, 2)
                         liq_p_s = round(valor_liq_s / n_s, 2)
                         grupo = str(_uuid.uuid4())[:8]
@@ -2129,10 +2131,10 @@ if page == "Agendamentos":
                             if eh_c:
                                 f_band = f_sel.lower()
                                 f_parc = st.number_input("Parcelas", min_value=1, max_value=12, value=1, step=1, key=f"pparc_{ag_id}_{idx_f}") if f_sel == "Credito" else 1
-                                fee_p = find_card_fee(cf_pag_all, f_band)
+                                n_p = int(f_parc) if f_sel == "Credito" else 1
+                                fee_p = find_card_fee(cf_pag_all, f_band, n_p)
                                 taxa_p = float(fee_p.iloc[0]["fee_percent"]) if not fee_p.empty else 0.0
                                 dias_p = int(fee_p.iloc[0]["days_to_receive"]) if not fee_p.empty else 30
-                                n_p = int(f_parc) if f_sel == "Credito" else 1
                                 liq_p = round(f_val - f_val * taxa_p / 100, 2)
                                 st.info(f"Taxa: {taxa_p:.2f}% | Liquido: {fmt_brl(liq_p)} | {n_p}x de {fmt_brl(round(liq_p/n_p,2))} (~{dias_p} dias)")
                             else:
@@ -2260,10 +2262,10 @@ if page == "Agendamentos":
 
                         if e_eh_cartao and e_val > 0:
                             cf_ep = get_card_fees(cid)
-                            fee_ep = find_card_fee(cf_ep, e_bandeira or "")
+                            n_ep = int(e_parcelas) if e_forma_sel == "Credito" else 1
+                            fee_ep = find_card_fee(cf_ep, e_bandeira or "", n_ep)
                             taxa_ep = float(fee_ep.iloc[0]["fee_percent"]) if not fee_ep.empty else 0.0
                             dias_ep = int(fee_ep.iloc[0]["days_to_receive"]) if not fee_ep.empty else 30
-                            n_ep = int(e_parcelas) if e_forma_sel == "Credito" else 1
                             vl_ep = round(e_val - e_val * taxa_ep / 100, 2)
                             st.info(f"Taxa: {taxa_ep:.2f}% | Liquido: {fmt_brl(vl_ep)} | {n_ep}x de {fmt_brl(round(vl_ep/n_ep,2))} (~{dias_ep} dias)")
 
