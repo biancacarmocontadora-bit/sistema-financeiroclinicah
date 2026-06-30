@@ -718,13 +718,13 @@ elif page == "Nova Entrada":
             profissional = st.selectbox("Profissional", list(prof_opts.keys()))
             status = st.selectbox("Status", ["pago", "pendente", "cancelado"])
             obs = st.text_area("Observacoes", height=80)
-
         submitted = st.form_submit_button("Lancar Entrada", use_container_width=True)
 
-        if submitted:
-            if not descricao or valor <= 0:
-                st.error("Preencha descricao e valor.")
-            else:
+    if submitted:
+        if not descricao or valor <= 0:
+            st.error("Preencha descricao e valor.")
+        else:
+            try:
                 bank_id = bank_opts[banco]
                 cat_id = cat_opts.get(categoria) if cat_opts else None
                 prof_id = prof_opts.get(profissional)
@@ -740,10 +740,10 @@ elif page == "Nova Entrada":
                         insert_data = []
                         for i in range(1, parcelas2 + 1):
                             d_caixa = data_comp + timedelta(days=days2 * i if parcelas2 > 1 else days2)
-                            desc_p = descricao + " [{}/{}]".format(i, parcelas2)
                             insert_data.append((
                                 cid, bank_id, prof_id, cat_id,
-                                "receita", desc_p, valor_liq_parcela,
+                                "receita", descricao + " [{}/{}]".format(i, parcelas2),
+                                valor_liq_parcela,
                                 data_comp.strftime("%Y-%m-%d"),
                                 d_caixa.strftime("%Y-%m-%d"),
                                 payment_method,
@@ -755,7 +755,7 @@ elif page == "Nova Entrada":
                              amount, date_competencia, date_caixa, payment_method, status,
                              installment_group, installment_num, installment_total, notes)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", insert_data)
-                        st.success("{} parcela(s) lancada(s)! Valor liquido por parcela: {}".format(parcelas2, fmt_brl(valor_liq_parcela)))
+                        st.success("{} parcela(s) lancada(s)! Liquido por parcela: {}".format(parcelas2, fmt_brl(valor_liq_parcela)))
                     else:
                         run("""INSERT INTO transactions
                             (company_id, bank_id, professional_id, category_id, type, description,
@@ -774,6 +774,8 @@ elif page == "Nova Entrada":
                          data_comp.strftime("%Y-%m-%d"), data_comp.strftime("%Y-%m-%d"),
                          payment_method, status, obs))
                     st.success("Entrada lancada com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
 
 elif page == "Nova Saida":
     st.title("Nova Saida de Despesa")
@@ -829,10 +831,12 @@ elif page == "Nova Saida":
         if parcelado:
             num_parcelas = st.number_input("Numero de parcelas", min_value=2, max_value=60, value=2, step=1)
         submitted = st.form_submit_button("Lancar Saida", use_container_width=True)
-        if submitted:
-            if not descricao or valor <= 0:
-                st.error("Preencha descricao e valor.")
-            else:
+
+    if submitted:
+        if not descricao or valor <= 0:
+            st.error("Preencha descricao e valor.")
+        else:
+            try:
                 bank_id = bank_opts[banco]
                 cat_id = cat_opts.get(categoria) if cat_opts else None
                 prof_id = prof_opts.get(profissional)
@@ -842,10 +846,10 @@ elif page == "Nova Saida":
                     insert_data = []
                     for i in range(1, int(num_parcelas) + 1):
                         d_c = data_caixa + timedelta(days=30 * (i - 1))
-                        desc_p = descricao + " [{}/{}]".format(i, int(num_parcelas))
                         insert_data.append((
                             cid, bank_id, prof_id, cat_id,
-                            "despesa", desc_p, valor_parcela,
+                            "despesa", descricao + " [{}/{}]".format(i, int(num_parcelas)),
+                            valor_parcela,
                             data_comp.strftime("%Y-%m-%d"), d_c.strftime("%Y-%m-%d"),
                             payment_method,
                             "pendente" if i > 1 else status,
@@ -866,6 +870,8 @@ elif page == "Nova Saida":
                          data_comp.strftime("%Y-%m-%d"), data_caixa.strftime("%Y-%m-%d"),
                          payment_method, status, obs))
                     st.success("Saida lancada com sucesso!")
+            except Exception as e:
+                st.error(f"Erro ao salvar: {e}")
 
 elif page == "Transferencia":
     st.title("Transferencia entre Bancos")
