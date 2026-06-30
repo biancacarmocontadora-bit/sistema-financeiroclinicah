@@ -706,7 +706,7 @@ elif page == "Nova Entrada":
             parcelas = int(fee_row.iloc[0]["installments"])
             st.info("Taxa: {}% | Recebimento em {} dias | {} parcela(s)".format(fee_pct, days, parcelas))
 
-    with st.form("form_entrada", clear_on_submit=True):
+    with st.form("form_entrada", clear_on_submit=False):
         col1, col2 = st.columns(2)
         with col1:
             descricao = st.text_input("Descricao")
@@ -721,7 +721,7 @@ elif page == "Nova Entrada":
         submitted = st.form_submit_button("Lancar Entrada", use_container_width=True)
 
     if submitted:
-        if not descricao or valor <= 0:
+        if not descricao.strip() or valor <= 0:
             st.error("Preencha descricao e valor.")
         else:
             try:
@@ -755,7 +755,7 @@ elif page == "Nova Entrada":
                              amount, date_competencia, date_caixa, payment_method, status,
                              installment_group, installment_num, installment_total, notes)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", insert_data)
-                        st.success("{} parcela(s) lancada(s)! Liquido por parcela: {}".format(parcelas2, fmt_brl(valor_liq_parcela)))
+                        st.session_state["entrada_msg"] = f"{parcelas2} parcela(s) lancada(s)! Liquido por parcela: {fmt_brl(valor_liq_parcela)}"
                     else:
                         run("""INSERT INTO transactions
                             (company_id, bank_id, professional_id, category_id, type, description,
@@ -764,7 +764,7 @@ elif page == "Nova Entrada":
                             (cid, bank_id, prof_id, cat_id, "receita", descricao, valor,
                              data_comp.strftime("%Y-%m-%d"), data_comp.strftime("%Y-%m-%d"),
                              payment_method, status, obs))
-                        st.success("Entrada lancada!")
+                        st.session_state["entrada_msg"] = f"Entrada '{descricao}' lancada com sucesso!"
                 else:
                     run("""INSERT INTO transactions
                         (company_id, bank_id, professional_id, category_id, type, description,
@@ -773,9 +773,13 @@ elif page == "Nova Entrada":
                         (cid, bank_id, prof_id, cat_id, "receita", descricao, valor,
                          data_comp.strftime("%Y-%m-%d"), data_comp.strftime("%Y-%m-%d"),
                          payment_method, status, obs))
-                    st.success("Entrada lancada com sucesso!")
+                    st.session_state["entrada_msg"] = f"Entrada '{descricao}' lancada com sucesso!"
+                st.rerun()
             except Exception as e:
                 st.error(f"Erro ao salvar: {e}")
+
+    if st.session_state.get("entrada_msg"):
+        st.success(st.session_state.pop("entrada_msg"))
 
 elif page == "Nova Saida":
     st.title("Nova Saida de Despesa")
@@ -949,6 +953,11 @@ elif page == "Extrato":
         dt_ini = st.date_input("De", value=today.replace(day=1))
     with col2:
         dt_fim = st.date_input("Ate", value=today)
+    # mostra total de registros no banco para debug rapido
+    total_tx = q("SELECT COUNT(*) as c FROM transactions WHERE company_id=?", (cid,))
+    n_total = int(total_tx.iloc[0]["c"]) if not total_tx.empty else 0
+    if n_total == 0:
+        st.warning("Nenhum lancamento encontrado no banco de dados para esta empresa.")
     with col3:
         tipo_filt = st.selectbox("Tipo", ["Todos", "receita", "despesa"])
     with col4:
