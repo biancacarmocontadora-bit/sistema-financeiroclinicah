@@ -1633,6 +1633,43 @@ elif page == "Configuracoes":
                 st.success("Profissional desativado.")
                 st.rerun()
 
+        st.markdown("---")
+        st.subheader("Unificar Nomes de Profissional")
+        st.caption("Substitui um nome antigo pelo nome correto em agendamentos e lancamentos financeiros.")
+
+        # Coleta todos os nomes distintos de medico nos agendamentos + tabela professionals
+        nomes_ag = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
+        nomes_tx = q("SELECT DISTINCT description FROM transactions WHERE company_id=? ORDER BY description", (cid,))
+        todos_medicos = sorted(set(
+            (df_prof["name"].tolist() if not df_prof.empty else []) +
+            (nomes_ag["medico"].tolist() if not nomes_ag.empty else [])
+        ))
+
+        if todos_medicos:
+            u1, u2 = st.columns(2)
+            with u1:
+                nome_de = st.selectbox("Nome ERRADO (substituir)", todos_medicos, key="unif_de")
+            with u2:
+                nome_para = st.selectbox("Nome CORRETO (manter)", todos_medicos, key="unif_para")
+
+            if nome_de != nome_para:
+                if st.button("Unificar agora", key="btn_unif", type="primary"):
+                    # Atualiza agendamentos
+                    run("UPDATE agendamentos SET medico=? WHERE company_id=? AND medico=?", (nome_para, cid, nome_de))
+                    # Atualiza descriptions nas transactions (LIKE para pegar parcelas)
+                    df_tx_upd = q("SELECT id, description FROM transactions WHERE company_id=? AND description LIKE ?",
+                                  (cid, f"%{nome_de}%"))
+                    if not df_tx_upd.empty:
+                        for _, r in df_tx_upd.iterrows():
+                            nova_desc = str(r["description"]).replace(nome_de, nome_para)
+                            run("UPDATE transactions SET description=? WHERE id=?", (nova_desc, int(r["id"])))
+                    # Desativa o nome errado na tabela professionals se existir
+                    run("UPDATE professionals SET active=0 WHERE company_id=? AND name=?", (cid, nome_de))
+                    st.success(f"Feito! '{nome_de}' substituido por '{nome_para}' em todos os registros.")
+                    st.rerun()
+        else:
+            st.info("Nenhum profissional cadastrado nos agendamentos.")
+
     with tab3:
         st.subheader("Categorias de Receita")
         df_cat_r = get_categories(cid, "receita")
