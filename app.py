@@ -328,13 +328,13 @@ def find_card_fee(card_fees_df, payment_method, n_parcelas=1):
     eh_debito  = pm in ("debito", "cartao debito")
     eh_credito = pm in ("credito", "cartao credito") or "credito" in pm
 
-    # Filtra linhas do tipo correto (card_type contem "debito" ou "credito")
+    # Somente credito e debito tem taxa — qualquer outra forma retorna vazio
     if eh_debito:
         subset = card_fees_df[card_fees_df["card_type"].str.lower().str.contains("debito")]
     elif eh_credito:
         subset = card_fees_df[card_fees_df["card_type"].str.lower().str.contains("credito")]
     else:
-        subset = card_fees_df
+        return pd.DataFrame()
 
     if subset.empty:
         return pd.DataFrame()
