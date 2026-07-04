@@ -92,6 +92,22 @@ def run_many(sql, data):
         conn.commit()
     conn.close()
 
+def run_insert_id(sql, params=()):
+    """Executa um INSERT e retorna o id da linha criada."""
+    conn = get_conn()
+    if USE_POSTGRES:
+        sql_pg = sql.replace("?", "%s") + " RETURNING id"
+        cur = conn.cursor()
+        cur.execute(sql_pg, params if params else None)
+        new_id = cur.fetchone()[0]
+        conn.commit()
+    else:
+        cur = conn.execute(sql, params)
+        new_id = cur.lastrowid
+        conn.commit()
+    conn.close()
+    return new_id
+
 def init_db():
     conn = get_conn()
     if USE_POSTGRES:
@@ -115,7 +131,7 @@ def init_db():
                 date_competencia TEXT NOT NULL, date_caixa TEXT NOT NULL,
                 payment_method TEXT DEFAULT 'dinheiro', status TEXT DEFAULT 'pago',
                 installment_group TEXT, installment_num INTEGER, installment_total INTEGER,
-                notes TEXT, created_at TIMESTAMP DEFAULT NOW())""",
+                notes TEXT, agendamento_id INTEGER, created_at TIMESTAMP DEFAULT NOW())""",
             """CREATE TABLE IF NOT EXISTS card_fees (
                 id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL, card_type TEXT NOT NULL,
                 installments INTEGER NOT NULL, fee_percent REAL NOT NULL,
@@ -142,6 +158,10 @@ def init_db():
                 cur.execute(f"ALTER TABLE agendamentos ADD COLUMN IF NOT EXISTS {col} {definition}")
             except Exception:
                 pass
+        try:
+            cur.execute("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS agendamento_id INTEGER")
+        except Exception:
+            pass
         # Garante que existe ao menos uma empresa
         cur.execute("SELECT COUNT(*) FROM companies")
         if cur.fetchone()[0] == 0:
@@ -199,7 +219,8 @@ def init_db():
                 date_caixa TEXT NOT NULL, payment_method TEXT DEFAULT 'dinheiro',
                 status TEXT DEFAULT 'pago', installment_group TEXT,
                 installment_num INTEGER, installment_total INTEGER,
-                notes TEXT, created_at TEXT DEFAULT (datetime('now','localtime')),
+                notes TEXT, agendamento_id INTEGER,
+                created_at TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY(company_id) REFERENCES companies(id),
                 FOREIGN KEY(bank_id) REFERENCES banks(id),
                 FOREIGN KEY(professional_id) REFERENCES professionals(id),
@@ -245,6 +266,11 @@ def init_db():
                 conn.commit()
             except Exception:
                 pass
+        try:
+            cur.execute("ALTER TABLE transactions ADD COLUMN agendamento_id INTEGER")
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         cur.execute("SELECT COUNT(*) FROM companies")
         if cur.fetchone()[0] == 0:
@@ -324,6 +350,9 @@ def find_card_fee(card_fees_df, payment_method, n_parcelas=1):
     if card_fees_df.empty:
         return pd.DataFrame()
     pm = payment_method.lower().strip()
+    # "em_conta" (Debito/Credito em Conta) e transferencia bancaria, nao cartao
+    if "em_conta" in pm:
+        return pd.DataFrame()
     # Determina se e credito ou debito
     eh_debito  = pm in ("debito", "cartao debito")
     eh_credito = pm in ("credito", "cartao credito") or "credito" in pm
@@ -1717,6 +1746,33 @@ elif page == "Configuracoes":
             st.info("Nenhuma taxa cadastrada.")
 
         st.markdown("---")
+        with st.expander("🔄 Limpar e recadastrar taxas corretas (padrao)"):
+            st.caption(
+                "Apaga TODAS as taxas desta empresa e cadastra a tabela correta:\n"
+                "- Debito: 1,15% (recebe em 1 dia)\n"
+                "- Credito a vista (1x): 2,25% (recebe em 30 dias)\n"
+                "- Credito parcelado (2x a 12x): 2,75% (cada parcela cai de 30 em 30 dias)\n\n"
+                "Depois voce pode editar qualquer taxa na secao abaixo."
+            )
+            confirm_taxas = st.text_input("Digite CONFIRMAR para recadastrar", key="confirm_taxas")
+            if st.button("Limpar e recadastrar taxas", key="reset_taxas"):
+                if confirm_taxas == "CONFIRMAR":
+                    taxas_padrao = [(cid, "debito", 1, 1.15, 1),
+                                    (cid, "credito_1x", 1, 2.25, 30)]
+                    for n in range(2, 13):
+                        taxas_padrao.append((cid, f"credito_{n}x", n, 2.75, 30))
+                    run("DELETE FROM card_fees WHERE company_id=?", (cid,))
+                    run_many(
+                        "INSERT INTO card_fees (company_id, card_type, installments, fee_percent, days_to_receive) VALUES (?,?,?,?,?)",
+                        taxas_padrao,
+                    )
+                    get_card_fees.clear()
+                    st.success("Taxas recadastradas com sucesso! (Debito 1,15% | Credito 1x 2,25% | Credito 2x-12x 2,75%)")
+                    st.rerun()
+                else:
+                    st.error("Digite CONFIRMAR para prosseguir.")
+
+        st.markdown("---")
         st.subheader("Adicionar Nova Taxa")
         with st.form("form_add_taxa"):
             col_t1, col_t2 = st.columns(2)
@@ -1914,7 +1970,7 @@ if page == "Agendamentos":
                     data_hora_str = ag_data.strftime("%Y-%m-%d") + " 08:00"
                     med_val  = (ag_medico   or "").strip()
                     conv_val = (ag_convenio or "").strip()
-                    run("""INSERT INTO agendamentos
+                    novo_ag_id = run_insert_id("""INSERT INTO agendamentos
                         (company_id, paciente, medico, data_hora, status, convenio,
                          tipo_consulta, valor, forma_pagamento, cartao_bandeira, cartao_parcelas)
                         VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
@@ -1942,15 +1998,15 @@ if page == "Agendamentos":
                             run("""INSERT INTO transactions
                                 (company_id, type, description, amount,
                                  date_competencia, date_caixa, payment_method,
-                                 status, installment_group, installment_num, installment_total, notes)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                 status, installment_group, installment_num, installment_total, notes, agendamento_id)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                                 (cid, "receita",
                                  f"{ag_tipo} - {ag_paciente.strip()} ({ag_forma_sel} {i}/{n_s})",
                                  liq_p_s,
                                  ag_data.strftime("%Y-%m-%d"), dt_caixa,
                                  ag_forma_sel, "pendente",
                                  grupo, i, n_s,
-                                 f"Taxa {taxa_s:.2f}% aplicada. Bruto: {fmt_brl(ag_valor)}"))
+                                 f"Taxa {taxa_s:.2f}% aplicada. Bruto: {fmt_brl(ag_valor)}", novo_ag_id))
 
                     st.session_state["ag_salvo_msg"] = f"Agendamento de {ag_paciente.strip()} salvo com sucesso!"
                     st.rerun()
@@ -2061,12 +2117,11 @@ if page == "Agendamentos":
                 with st.expander("💳 Efetuar Pagamento" + (" ✅ Pago" if ja_pago else "")):
                     if ja_pago:
                         st.success("Este agendamento ja foi marcado como realizado.")
-                        # Busca lançamentos pelo grupo ou pela descricao do paciente
-                        desc_busca = row['paciente']
+                        # Busca lançamentos vinculados especificamente a este agendamento
                         df_pag_lc = q("""SELECT id, description, amount, date_competencia, date_caixa, payment_method, status
-                                          FROM transactions WHERE company_id=? AND description LIKE ?
+                                          FROM transactions WHERE company_id=? AND agendamento_id=?
                                           ORDER BY date_caixa""",
-                                      (cid, f"%{desc_busca}%"))
+                                      (cid, ag_id))
                         if not df_pag_lc.empty:
                             st.markdown("**Lancamentos registrados:**")
                             # Mostra cada lancamento com botao de excluir
@@ -2193,13 +2248,13 @@ if page == "Agendamentos":
                                             f"{desc_base} ({f_sel} {i}/{n_p2})",
                                             liq_p2, dt_comp, dt_cx, f_sel, "pendente",
                                             grupo2, i, n_p2,
-                                            p_obs or f"Taxa {taxa_p:.2f}%. Bruto: {fmt_brl(f_val)}"))
+                                            p_obs or f"Taxa {taxa_p:.2f}%. Bruto: {fmt_brl(f_val)}", ag_id))
                                 else:
                                     rows_tx.append((cid, bank_id_pag, "receita",
                                         f"{desc_base} ({f_sel})",
                                         f_val, dt_comp, dt_comp, f_sel, "pago",
                                         None, None, None,
-                                        p_obs or ""))
+                                        p_obs or "", ag_id))
                                 formas_salvas.append(f_sel)
 
                             # Um único round-trip ao banco para todos os lançamentos
@@ -2207,8 +2262,8 @@ if page == "Agendamentos":
                                 run_many("""INSERT INTO transactions
                                     (company_id, bank_id, type, description, amount,
                                      date_competencia, date_caixa, payment_method, status,
-                                     installment_group, installment_num, installment_total, notes)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
+                                     installment_group, installment_num, installment_total, notes, agendamento_id)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
 
                             formas_str = " + ".join(formas_salvas)
                             run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
