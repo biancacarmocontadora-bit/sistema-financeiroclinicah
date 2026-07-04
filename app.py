@@ -1852,6 +1852,30 @@ Funcionalidades:
                     st.rerun()
                 else:
                     st.error("Digite CONFIRMAR para prosseguir.")
+        with st.expander("🗓️ Apagar TODOS os agendamentos desta empresa"):
+            st.warning("Apaga TODOS os agendamentos desta empresa. Esta acao e irreversivel!")
+            tb_lanc = st.checkbox(
+                "Tambem apagar os lancamentos financeiros gerados por esses agendamentos",
+                key="del_ag_lanc",
+            )
+            confirm_ag = st.text_input("Digite CONFIRMAR para prosseguir", key="confirm_del_ag")
+            if st.button("Apagar todos os agendamentos", key="danger_del_ag"):
+                if confirm_ag == "CONFIRMAR":
+                    cnt = q("SELECT COUNT(*) as c FROM agendamentos WHERE company_id=?", (cid,))
+                    total_ag = int(cnt.iloc[0]["c"]) if not cnt.empty else 0
+                    total_lanc = 0
+                    if tb_lanc:
+                        cnt_l = q("SELECT COUNT(*) as c FROM transactions WHERE company_id=? AND agendamento_id IS NOT NULL", (cid,))
+                        total_lanc = int(cnt_l.iloc[0]["c"]) if not cnt_l.empty else 0
+                        run("DELETE FROM transactions WHERE company_id=? AND agendamento_id IS NOT NULL", (cid,))
+                    run("DELETE FROM agendamentos WHERE company_id=?", (cid,))
+                    msg = f"Apagados {total_ag} agendamento(s)."
+                    if tb_lanc:
+                        msg += f" Removidos {total_lanc} lancamento(s) vinculado(s)."
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error("Digite CONFIRMAR para prosseguir.")
         with st.expander("Apagar TODOS os lancamentos desta empresa"):
             st.warning("Esta acao e irreversivel!")
             confirm = st.text_input("Digite CONFIRMAR para prosseguir")
