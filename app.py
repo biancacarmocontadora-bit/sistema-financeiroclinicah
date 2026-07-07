@@ -49,64 +49,101 @@ def get_conn():
             raise
     return sqlite3.connect(DB_PATH)
 
-def q(sql, params=()):
-    conn = get_conn()
+@st.cache_resource
+def get_pool():
+    """Pool de conexoes Postgres reaproveitado entre reruns/sessoes (evita
+    abrir uma conexao SSL nova a cada consulta)."""
+    import urllib.parse
+    from psycopg2.pool import ThreadedConnectionPool
+    url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
+    return ThreadedConnectionPool(
+        1, 10,
+        host=url.hostname,
+        port=url.port or 5432,
+        dbname=url.path.lstrip("/"),
+        user=url.username,
+        password=url.password,
+        sslmode="require",
+        connect_timeout=15,
+    )
+
+def _acquire():
     if USE_POSTGRES:
-        sql_pg = sql.replace("?", "%s")
-        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cur.execute(sql_pg, params if params else None)
-        cols = [d.name for d in cur.description] if cur.description else []
-        rows = cur.fetchall()
-        conn.close()
-        if rows:
-            return pd.DataFrame([dict(r) for r in rows])
-        return pd.DataFrame(columns=cols)
+        return get_pool().getconn()
+    return sqlite3.connect(DB_PATH)
+
+def _release(conn, error=False):
+    if USE_POSTGRES:
+        try:
+            conn.rollback() if error else conn.commit()
+        except Exception:
+            pass
+        # Em caso de erro devolve a conexao ja descartada para nao contaminar o pool
+        get_pool().putconn(conn, close=error)
     else:
+        conn.close()
+
+def _is_conn_dead(e):
+    """True quando o erro indica conexao do pool morta (idle derrubada pelo
+    servidor), caso em que vale a pena tentar de novo com uma conexao nova."""
+    if not USE_POSTGRES:
+        return False
+    return isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError))
+
+def _run_pooled(work):
+    """Adquire conexao, executa work(conn), commita e devolve ao pool.
+    No Postgres tenta 1x novamente se a conexao estiver morta."""
+    attempts = 2 if USE_POSTGRES else 1
+    for i in range(attempts):
+        conn = _acquire()
+        try:
+            result = work(conn)
+            _release(conn)
+            return result
+        except Exception as e:
+            _release(conn, error=True)
+            if i + 1 < attempts and _is_conn_dead(e):
+                continue
+            raise
+
+def q(sql, params=()):
+    def work(conn):
+        if USE_POSTGRES:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql.replace("?", "%s"), params if params else None)
+            cols = [d.name for d in cur.description] if cur.description else []
+            rows = cur.fetchall()
+            return pd.DataFrame([dict(r) for r in rows]) if rows else pd.DataFrame(columns=cols)
         cur = conn.execute(sql, params)
         cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchall()
-        conn.close()
-        return pd.DataFrame(rows, columns=cols)
+        return pd.DataFrame(cur.fetchall(), columns=cols)
+    return _run_pooled(work)
 
 def run(sql, params=()):
-    conn = get_conn()
-    if USE_POSTGRES:
-        sql_pg = sql.replace("?", "%s")
-        cur = conn.cursor()
-        cur.execute(sql_pg, params if params else None)
-        conn.commit()
-    else:
-        conn.execute(sql, params)
-        conn.commit()
-    conn.close()
+    def work(conn):
+        if USE_POSTGRES:
+            conn.cursor().execute(sql.replace("?", "%s"), params if params else None)
+        else:
+            conn.execute(sql, params)
+    _run_pooled(work)
 
 def run_many(sql, data):
-    conn = get_conn()
-    if USE_POSTGRES:
-        sql_pg = sql.replace("?", "%s")
-        cur = conn.cursor()
-        cur.executemany(sql_pg, [tuple(r) for r in data])
-        conn.commit()
-    else:
-        conn.executemany(sql, data)
-        conn.commit()
-    conn.close()
+    def work(conn):
+        if USE_POSTGRES:
+            conn.cursor().executemany(sql.replace("?", "%s"), [tuple(r) for r in data])
+        else:
+            conn.executemany(sql, data)
+    _run_pooled(work)
 
 def run_insert_id(sql, params=()):
     """Executa um INSERT e retorna o id da linha criada."""
-    conn = get_conn()
-    if USE_POSTGRES:
-        sql_pg = sql.replace("?", "%s") + " RETURNING id"
-        cur = conn.cursor()
-        cur.execute(sql_pg, params if params else None)
-        new_id = cur.fetchone()[0]
-        conn.commit()
-    else:
-        cur = conn.execute(sql, params)
-        new_id = cur.lastrowid
-        conn.commit()
-    conn.close()
-    return new_id
+    def work(conn):
+        if USE_POSTGRES:
+            cur = conn.cursor()
+            cur.execute(sql.replace("?", "%s") + " RETURNING id", params if params else None)
+            return cur.fetchone()[0]
+        return conn.execute(sql, params).lastrowid
+    return _run_pooled(work)
 
 def init_db():
     conn = get_conn()
@@ -310,7 +347,13 @@ def init_db():
             conn.commit()
         conn.close()
 
-init_db()
+@st.cache_resource
+def _ensure_db():
+    """Garante o schema uma unica vez por deploy (nao roda a cada rerun)."""
+    init_db()
+    return True
+
+_ensure_db()
 
 st.markdown("""
 <style>
