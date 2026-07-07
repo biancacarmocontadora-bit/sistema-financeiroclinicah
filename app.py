@@ -2245,7 +2245,11 @@ if page == "Agendamentos":
                         valor_total_ag = float(row["valor"] or 0)
                         cf_pag_all = get_card_fees(cid)
 
-                        p_data = st.date_input("Data do Pagamento", value=date.today(), key=f"pd_{ag_id}")
+                        try:
+                            data_pag_default = date.fromisoformat(str(row["data_hora"])[:10])
+                        except Exception:
+                            data_pag_default = date.today()
+                        p_data = st.date_input("Data do Pagamento", value=data_pag_default, key=f"pd_{ag_id}")
                         n_formas = st.radio("Numero de formas de pagamento", [1, 2, 3], horizontal=True, key=f"nf_{ag_id}")
 
                         pagamentos_config = []
