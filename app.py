@@ -49,15 +49,19 @@ def get_conn():
             raise
     return sqlite3.connect(DB_PATH)
 
+import threading
+
 @st.cache_resource
-def get_pool():
-    """Pool de conexoes Postgres reaproveitado entre reruns/sessoes (evita
-    abrir uma conexao SSL nova a cada consulta)."""
+def _pg_holder():
+    """Guarda uma conexao Postgres persistente, reaproveitada entre reruns e
+    sessoes (evita abrir uma conexao SSL nova a cada consulta), protegida por
+    uma trava para uso seguro entre threads."""
+    return {"conn": None, "lock": threading.Lock()}
+
+def _pg_connect():
     import urllib.parse
-    from psycopg2.pool import ThreadedConnectionPool
     url = urllib.parse.urlparse(st.secrets["DATABASE_URL"])
-    return ThreadedConnectionPool(
-        1, 10,
+    return psycopg2.connect(
         host=url.hostname,
         port=url.port or 5432,
         dbname=url.path.lstrip("/"),
@@ -67,44 +71,53 @@ def get_pool():
         connect_timeout=15,
     )
 
-def _acquire():
-    if USE_POSTGRES:
-        return get_pool().getconn()
-    return sqlite3.connect(DB_PATH)
-
-def _release(conn, error=False):
-    if USE_POSTGRES:
-        try:
-            conn.rollback() if error else conn.commit()
-        except Exception:
-            pass
-        # Em caso de erro devolve a conexao ja descartada para nao contaminar o pool
-        get_pool().putconn(conn, close=error)
-    else:
-        conn.close()
-
-def _is_conn_dead(e):
-    """True quando o erro indica conexao do pool morta (idle derrubada pelo
-    servidor), caso em que vale a pena tentar de novo com uma conexao nova."""
-    if not USE_POSTGRES:
-        return False
-    return isinstance(e, (psycopg2.OperationalError, psycopg2.InterfaceError))
+def _pg_discard(holder, conn):
+    """Fecha e esquece uma conexao possivelmente morta."""
+    try:
+        if conn is not None:
+            conn.close()
+    except Exception:
+        pass
+    holder["conn"] = None
 
 def _run_pooled(work):
-    """Adquire conexao, executa work(conn), commita e devolve ao pool.
-    No Postgres tenta 1x novamente se a conexao estiver morta."""
-    attempts = 2 if USE_POSTGRES else 1
-    for i in range(attempts):
-        conn = _acquire()
+    """Executa work(conn) reaproveitando a conexao. SQLite abre/fecha na hora;
+    Postgres usa a conexao persistente, com reconexao automatica se cair."""
+    if not USE_POSTGRES:
+        conn = sqlite3.connect(DB_PATH)
         try:
             result = work(conn)
-            _release(conn)
+            conn.commit()
             return result
-        except Exception as e:
-            _release(conn, error=True)
-            if i + 1 < attempts and _is_conn_dead(e):
-                continue
-            raise
+        finally:
+            conn.close()
+
+    holder = _pg_holder()
+    with holder["lock"]:
+        for attempt in range(2):
+            conn = holder.get("conn")
+            try:
+                if conn is None or conn.closed:
+                    conn = _pg_connect()
+                    holder["conn"] = conn
+                result = work(conn)
+                conn.commit()
+                return result
+            except (psycopg2.OperationalError, psycopg2.InterfaceError):
+                # Conexao caiu (ex.: Supabase derruba as ociosas): descarta e,
+                # na primeira tentativa, reconecta e refaz a consulta.
+                _pg_discard(holder, conn)
+                if attempt == 0:
+                    continue
+                raise
+            except Exception:
+                # Erro de SQL comum: desfaz a transacao e mantem a conexao viva.
+                try:
+                    if conn is not None and not conn.closed:
+                        conn.rollback()
+                except Exception:
+                    _pg_discard(holder, conn)
+                raise
 
 def q(sql, params=()):
     def work(conn):
