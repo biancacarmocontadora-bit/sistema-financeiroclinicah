@@ -5,6 +5,12 @@
 {% endblock %}
 
 {% block topbar_actions %}
+<button class="btn btn-outline-success btn-sm" onclick="gerarRecebimentos(this)" title="Gera no extrato os recebimentos de agendamentos realizados que ainda não têm lançamento (com o médico)">
+  <i class="bi bi-arrow-repeat"></i> Gerar recebimentos de agendamentos
+</button>
+<button class="btn btn-outline-primary btn-sm" onclick="detectarMedicos(this)" title="Preenche o profissional automaticamente nos lançamentos importados, procurando o nome na descrição">
+  <i class="bi bi-magic"></i> Detectar profissionais
+</button>
 <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#modalImportarOFX">
   <i class="bi bi-file-earmark-arrow-up"></i> Importar OFX/CSV
 </button>
@@ -151,9 +157,17 @@
             </td>
             <td>{{ l.descricao }}</td>
             <td>
-              {% if l.medico %}
-              <span class="badge bg-light text-dark border" style="font-size:.72rem">{{ l.medico }}</span>
-              {% else %}—{% endif %}
+              <select class="form-select form-select-sm medico-select {{ '' if l.medico else 'text-muted' }}"
+                      data-id="{{ l.id }}" onchange="salvarMedico(this)"
+                      style="min-width:140px;font-size:.72rem">
+                <option value="">— Sem profissional —</option>
+                {% for m in medicos_lista %}
+                <option value="{{ m }}" {{ 'selected' if l.medico == m }}>{{ m }}</option>
+                {% endfor %}
+                {% if l.medico and l.medico not in medicos_lista %}
+                <option value="{{ l.medico }}" selected>{{ l.medico }}</option>
+                {% endif %}
+              </select>
             </td>
             <td class="text-muted small">{{ l.categoria or '—' }}</td>
             <td>
@@ -366,6 +380,60 @@ async function salvarLancamento() {
     setTimeout(() => location.reload(), 700);
   } else {
     showToast(res.erro, 'danger');
+  }
+}
+
+async function gerarRecebimentos(btn) {
+  if (!confirm('Gerar no extrato os recebimentos de agendamentos já realizados que ainda não aparecem aqui? Os lançamentos entram na conta Caixa Clínica, já com o médico.')) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Gerando...';
+  const res = await apiPost('/agendamentos/gerar-recebimentos-faltantes', {});
+  btn.disabled = false;
+  btn.innerHTML = original;
+  if (res.ok) {
+    if (res.criados > 0) {
+      showToast(`${res.criados} recebimento(s) lançado(s) no extrato!`);
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      showToast('Nenhum recebimento pendente de lançamento.', 'warning');
+    }
+  } else {
+    showToast(res.erro || 'Erro ao gerar', 'danger');
+  }
+}
+
+async function detectarMedicos(btn) {
+  if (!confirm('Preencher o profissional automaticamente nos lançamentos que ainda estão sem médico? O sistema vai procurar o nome de cada profissional dentro da descrição.')) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Detectando...';
+  const res = await apiPost('/extratos/detectar-medicos', {});
+  btn.disabled = false;
+  btn.innerHTML = original;
+  if (res.ok) {
+    if (res.atualizados > 0) {
+      showToast(`${res.atualizados} lançamento(s) atualizado(s)!`);
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      showToast('Nenhum profissional identificado nas descrições.', 'warning');
+    }
+  } else {
+    showToast(res.erro || 'Erro ao detectar', 'danger');
+  }
+}
+
+async function salvarMedico(sel) {
+  const id = sel.dataset.id;
+  const medico = sel.value;
+  const res = await apiPost(`/extratos/${id}/medico`, { medico });
+  if (res.ok) {
+    showToast(medico ? 'Profissional atribuído!' : 'Profissional removido');
+    sel.classList.toggle('text-muted', !medico);
+    sel.classList.add('border-success');
+    setTimeout(() => sel.classList.remove('border-success'), 1200);
+  } else {
+    showToast(res.erro || 'Erro ao salvar', 'danger');
   }
 }
 

@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
-from models import db, LancamentoBancario, ContaPagar, Conciliacao, ContaReceber, ContaBancaria, ParcelaCartao, PagamentoCartao
+from models import db, LancamentoBancario, ContaPagar, Conciliacao, ContaReceber, ContaBancaria, ParcelaCartao, PagamentoCartao, Agendamento, normalizar_nome
 from sqlalchemy import func, extract
 from datetime import datetime, date
 import pandas as pd
@@ -19,6 +19,29 @@ def resolver_conta(nome_ou_id):
     except (ValueError, TypeError):
         c = ContaBancaria.query.filter_by(nome=nome_ou_id).first()
         return (c.id, c.nome) if c else (None, str(nome_ou_id))
+
+
+def listar_medicos():
+    """Lista de profissionais conhecidos (de agendamentos e lançamentos)."""
+    nomes = set()
+    for (m,) in db.session.query(Agendamento.medico).distinct():
+        if m and m.strip():
+            nomes.add(m.strip())
+    for (m,) in db.session.query(LancamentoBancario.medico).distinct():
+        if m and m.strip():
+            nomes.add(m.strip())
+    return sorted(nomes, key=lambda s: s.lower())
+
+
+def detectar_medico(descricao, nomes):
+    """Tenta identificar um profissional dentro da descrição do lançamento."""
+    if not descricao:
+        return ''
+    desc = descricao.lower()
+    for nome in nomes:
+        if nome.lower() in desc:
+            return nome
+    return ''
 
 
 # ── EXTRATOS ─────────────────────────────────────────────────────────────────
@@ -78,10 +101,7 @@ def extratos():
         *([LancamentoBancario.conta_id == int(conta_id_str)] if conta_id_str else [])
     ).scalar() or 0
 
-    medicos_lista = db.session.query(LancamentoBancario.medico).filter(
-        LancamentoBancario.medico.isnot(None),
-        LancamentoBancario.medico != ''
-    ).distinct().all()
+    medicos_lista = listar_medicos()
 
     return render_template('extratos.html',
         lancamentos=lancamentos,
@@ -90,7 +110,7 @@ def extratos():
         total_receitas=total_receitas,
         total_despesas=abs(total_despesas),
         saldo_filtro=total_receitas + total_despesas,
-        medicos_lista=[m[0] for m in medicos_lista],
+        medicos_lista=medicos_lista,
         filtros={
             'conta_id': conta_id_str, 'data_ini': data_ini,
             'data_fim': data_fim, 'tipo': tipo, 'medico': medico,
@@ -109,6 +129,7 @@ def importar_ofx():
     try:
         from ofxparse import OfxParser
         ofx = OfxParser.parse(arquivo)
+        nomes_medicos = listar_medicos()
         inseridos = 0
         duplicados = 0
         for transacao in ofx.account.statement.transactions:
@@ -118,13 +139,15 @@ def importar_ofx():
                 duplicados += 1
                 continue
             valor = float(transacao.amount)
+            descricao = transacao.memo or transacao.payee or ''
             lanc = LancamentoBancario(
                 conta_id=cid,
                 conta=cnome,
                 data=transacao.date.date() if hasattr(transacao.date, 'date') else transacao.date,
-                descricao=transacao.memo or transacao.payee or '',
+                descricao=descricao,
                 valor=valor,
                 tipo='credito' if valor >= 0 else 'debito',
+                medico=detectar_medico(descricao, nomes_medicos),
                 id_ofx=id_ofx,
                 origem='ofx',
             )
@@ -157,6 +180,7 @@ def importar_csv():
             return jsonify({'erro': 'Formato não suportado. Use CSV, XLS ou XLSX.'}), 400
 
         df.columns = [c.strip().lower() for c in df.columns]
+        nomes_medicos = listar_medicos()
         inseridos = 0
 
         for _, row in df.iterrows():
@@ -187,13 +211,15 @@ def importar_csv():
                 valor_raw = str(row[valor_col]).replace('R$', '').replace('.', '').replace(',', '.').strip()
                 valor = float(valor_raw)
 
+                descricao = str(row[desc_col]).strip()
                 lanc = LancamentoBancario(
                     conta_id=cid,
                     conta=cnome,
                     data=data_obj,
-                    descricao=str(row[desc_col]).strip(),
+                    descricao=descricao,
                     valor=valor,
                     tipo='credito' if valor >= 0 else 'debito',
+                    medico=detectar_medico(descricao, nomes_medicos),
                     origem='csv',
                 )
                 db.session.add(lanc)
@@ -221,7 +247,7 @@ def novo_lancamento():
             valor=float(data['valor']),
             tipo=data.get('tipo', 'debito'),
             categoria=data.get('categoria', ''),
-            medico=data.get('medico', ''),
+            medico=normalizar_nome(data.get('medico', '')),
             origem='manual',
         )
         db.session.add(lanc)
@@ -238,6 +264,38 @@ def excluir_lancamento(id):
     db.session.delete(lanc)
     db.session.commit()
     return jsonify({'ok': True})
+
+
+@bp.route('/extratos/<int:id>/medico', methods=['POST'])
+def atualizar_medico_lancamento(id):
+    """Atribui/altera o profissional de um lançamento (ex.: itens importados do banco)."""
+    lanc = LancamentoBancario.query.get_or_404(id)
+    lanc.medico = normalizar_nome(request.json.get('medico') or '')
+    db.session.commit()
+    return jsonify({'ok': True, 'medico': lanc.medico})
+
+
+@bp.route('/extratos/detectar-medicos', methods=['POST'])
+def detectar_medicos_lancamentos():
+    """Aplica a detecção automática de profissional nos lançamentos ainda sem médico."""
+    nomes = listar_medicos()
+    if not nomes:
+        return jsonify({'ok': True, 'atualizados': 0})
+
+    sem_medico = LancamentoBancario.query.filter(
+        db.or_(LancamentoBancario.medico.is_(None), LancamentoBancario.medico == '')
+    ).all()
+
+    atualizados = 0
+    for lanc in sem_medico:
+        encontrado = detectar_medico(lanc.descricao, nomes)
+        if encontrado:
+            lanc.medico = encontrado
+            atualizados += 1
+
+    if atualizados:
+        db.session.commit()
+    return jsonify({'ok': True, 'atualizados': atualizados, 'analisados': len(sem_medico)})
 
 
 # ── CONTAS A PAGAR ────────────────────────────────────────────────────────────
@@ -507,7 +565,7 @@ def baixar_conta_receber(id):
         valor=float(data.get('valor', cr.valor)),
         tipo='credito',
         categoria='Receita consulta',
-        medico=cr.medico or '',
+        medico=normalizar_nome(cr.medico or ''),
         origem='manual',
     )
     db.session.add(lanc)

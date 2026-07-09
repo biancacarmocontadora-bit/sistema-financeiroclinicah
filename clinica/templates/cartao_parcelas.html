@@ -3,6 +3,9 @@
 {% block page_title %}Recebíveis Provisionados — Cartão{% endblock %}
 
 {% block topbar_actions %}
+<button class="btn btn-outline-success btn-sm" onclick="gerarLancamentosCartao(this)" title="Cria no extrato os recebimentos de cartão que ainda não têm lançamento, cada um na data prevista e com o médico">
+  <i class="bi bi-arrow-repeat"></i> Gerar no extrato (pendentes)
+</button>
 <a href="{{ url_for('cartao.lista') }}" class="btn btn-outline-secondary btn-sm">
   <i class="bi bi-arrow-left"></i> Voltar
 </a>
@@ -224,6 +227,26 @@ async function confirmarReceberLote() {
   bootstrap.Modal.getInstance(document.getElementById('modalReceberLote')).hide();
   showToast(`${ok} parcela(s) recebida(s)${erros ? ', ' + erros + ' erro(s)' : ''}`);
   setTimeout(() => location.reload(), 800);
+}
+
+async function gerarLancamentosCartao(btn) {
+  if (!confirm('Gerar no extrato os recebimentos de cartão que ainda não aparecem lá? Cada parcela entra na sua data prevista (as datas futuras aparecem como previsão no saldo), com o médico.')) return;
+  const original = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Gerando...';
+  const res = await apiPost('/cartao/gerar-lancamentos-pendentes', {});
+  btn.disabled = false;
+  btn.innerHTML = original;
+  if (res.ok) {
+    if (res.criados > 0) {
+      showToast(`${res.criados} recebimento(s) de cartão lançado(s) no extrato!`);
+      setTimeout(() => location.reload(), 1000);
+    } else {
+      showToast('Nenhuma parcela pendente de lançamento.', 'warning');
+    }
+  } else {
+    showToast(res.erro || 'Erro ao gerar', 'danger');
+  }
 }
 
 async function receberParcela(id, btn) {

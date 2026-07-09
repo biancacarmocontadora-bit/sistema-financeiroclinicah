@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify, flash, redirect, url_for
-from models import db, Agendamento, ContaReceber, LancamentoBancario, ContaBancaria, TaxaCartao, PagamentoCartao, ParcelaCartao
+from models import db, Agendamento, ContaReceber, LancamentoBancario, ContaBancaria, TaxaCartao, PagamentoCartao, ParcelaCartao, normalizar_nome
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 import pandas as pd
@@ -128,6 +128,42 @@ def sincronizar_parcelas_cartao(ag: Agendamento):
         db.session.add(p)
 
 
+def conta_padrao_recebimento():
+    """Conta bancária padrão para recebimentos de dinheiro/pix (caixa da clínica)."""
+    conta = ContaBancaria.query.filter(
+        ContaBancaria.nome.ilike('%caixa%'), ContaBancaria.ativa.is_(True)
+    ).first()
+    if not conta:
+        conta = ContaBancaria.query.filter_by(ativa=True).order_by(ContaBancaria.id).first()
+    return conta
+
+
+def gerar_lancamento_recebimento(cr: ContaReceber, ag: Agendamento):
+    """Cria o lançamento no extrato ao receber uma conta (dinheiro/pix/convênio/cheque),
+    já vinculado ao médico. Cartão não passa por aqui — usa o fluxo de parcelas."""
+    if cr.lancamento_id:  # já lançado, evita duplicar
+        return
+    conta = conta_padrao_recebimento()
+    forma = cr.forma_pagamento or ag.forma_pagamento or 'dinheiro'
+    forma_label = {'dinheiro': 'Dinheiro', 'pix': 'Pix', 'cartao': 'Cartão',
+                   'convenio': 'Convênio', 'cheque': 'Cheque'}.get(forma, forma)
+    desc = f"Recebimento {forma_label} – {cr.paciente} – {cr.descricao or 'Consulta'}"
+    lanc = LancamentoBancario(
+        conta_id=conta.id if conta else None,
+        conta=conta.nome if conta else 'Caixa',
+        data=cr.data_recebimento or ag.data_hora.date(),
+        descricao=desc,
+        valor=float(cr.valor or 0),
+        tipo='credito',
+        categoria='Receita consulta',
+        medico=normalizar_nome(cr.medico or ag.medico or ''),
+        origem='agendamento',
+    )
+    db.session.add(lanc)
+    db.session.flush()
+    cr.lancamento_id = lanc.id
+
+
 def sincronizar_conta_receber(ag: Agendamento):
     """
     Mantém ContaReceber sincronizada com o status do agendamento.
@@ -151,6 +187,7 @@ def sincronizar_conta_receber(ag: Agendamento):
         cr.descricao = f"Consulta – {ag.tipo_consulta or ag.especialidade or 'Atendimento'}"
         cr.valor = ag.valor or 0.0
         cr.data_prevista = ag.data_hora.date()
+        cr.forma_pagamento = ag.forma_pagamento or cr.forma_pagamento
         if cr.status == 'cancelado':
             cr.status = 'pendente'
 
@@ -158,6 +195,9 @@ def sincronizar_conta_receber(ag: Agendamento):
         if cr and cr.status == 'pendente':
             cr.status = 'recebido'
             cr.data_recebimento = ag.data_hora.date()
+            cr.medico = cr.medico or ag.medico or ''
+            # Lança automaticamente no extrato, vinculado ao médico
+            gerar_lancamento_recebimento(cr, ag)
 
     elif ag.status in STATUS_CANCELA_CR:
         if cr and cr.status == 'pendente':
@@ -203,7 +243,7 @@ def novo():
     if request.method == 'POST':
         ag = Agendamento(
             paciente=request.form['paciente'],
-            medico=request.form.get('medico', ''),
+            medico=normalizar_nome(request.form.get('medico', '')),
             especialidade=request.form.get('especialidade', ''),
             data_hora=datetime.strptime(request.form['data_hora'], '%Y-%m-%dT%H:%M'),
             status=request.form.get('status', 'agendado'),
@@ -233,7 +273,7 @@ def editar(id):
     ag = Agendamento.query.get_or_404(id)
     if request.method == 'POST':
         ag.paciente = request.form['paciente']
-        ag.medico = request.form.get('medico', '')
+        ag.medico = normalizar_nome(request.form.get('medico', ''))
         ag.especialidade = request.form.get('especialidade', '')
         ag.data_hora = datetime.strptime(request.form['data_hora'], '%Y-%m-%dT%H:%M')
         ag.status = request.form.get('status', 'agendado')
@@ -262,6 +302,29 @@ def atualizar_status(id):
     sincronizar_conta_receber(ag)
     db.session.commit()
     return jsonify({'ok': True, 'status': ag.status})
+
+
+@bp.route('/agendamentos/gerar-recebimentos-faltantes', methods=['POST'])
+def gerar_recebimentos_faltantes():
+    """Cria lançamentos no extrato para contas a receber já recebidas mas sem lançamento
+    (agendamentos marcados como realizados antes desta correção)."""
+    faltantes = ContaReceber.query.filter(
+        ContaReceber.status == 'recebido',
+        ContaReceber.lancamento_id.is_(None),
+    ).all()
+    criados = 0
+    for cr in faltantes:
+        ag = cr.agendamento
+        if ag is None:
+            continue
+        # Cartão tem fluxo próprio (parcelas), não lança aqui
+        if (cr.forma_pagamento or ag.forma_pagamento) == 'cartao':
+            continue
+        gerar_lancamento_recebimento(cr, ag)
+        criados += 1
+    if criados:
+        db.session.commit()
+    return jsonify({'ok': True, 'criados': criados, 'analisados': len(faltantes)})
 
 
 @bp.route('/agendamentos/importar', methods=['POST'])
@@ -444,7 +507,7 @@ def importar():
                 ag.paciente = paciente
                 ag.id_externo = id_ext
                 ag.data_hora = data_hora
-                ag.medico = str(row[col_map['medico']]).strip() if col_map.get('medico') and not pd.isna(row.get(col_map['medico'])) else ''
+                ag.medico = normalizar_nome(str(row[col_map['medico']])) if col_map.get('medico') and not pd.isna(row.get(col_map['medico'])) else ''
                 ag.especialidade = str(row[col_map['especialidade']]).strip() if col_map.get('especialidade') and not pd.isna(row.get(col_map['especialidade'])) else ''
                 if col_map.get('status') and not pd.isna(row.get(col_map['status'])):
                     status_raw = str(row[col_map['status']]).strip().lower()

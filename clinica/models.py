@@ -1,7 +1,16 @@
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import re
 
 db = SQLAlchemy()
+
+
+def normalizar_nome(nome):
+    """Padroniza nome de profissional: remove espaços duplicados e sobras.
+    Ex.: 'HARUKI  MATSUNAGA ' -> 'HARUKI MATSUNAGA'. Mantém None/'' como estão."""
+    if not nome:
+        return nome
+    return re.sub(r'\s+', ' ', str(nome)).strip()
 
 
 class ContaBancaria(db.Model):

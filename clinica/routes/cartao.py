@@ -1,5 +1,5 @@
 from flask import Blueprint, render_template, request, jsonify
-from models import db, PagamentoCartao, ParcelaCartao, TaxaCartao, LancamentoBancario
+from models import db, PagamentoCartao, ParcelaCartao, TaxaCartao, LancamentoBancario, ContaBancaria, normalizar_nome
 from datetime import date, datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from sqlalchemy import func, extract
@@ -97,6 +97,48 @@ def calcular_parcelas(valor_bruto: float, num_parcelas: int, taxa_pct: float,
         })
 
     return parcelas
+
+
+def conta_padrao_cartao():
+    """Conta bancária padrão para os recebimentos de cartão (adquirente)."""
+    c = ContaBancaria.query.filter(
+        ContaBancaria.nome.ilike('%pagbank%'), ContaBancaria.ativa.is_(True)
+    ).first()
+    if not c:
+        c = ContaBancaria.query.filter_by(ativa=True).order_by(ContaBancaria.id).first()
+    return c
+
+
+def gerar_lancamento_parcela(parcela, conta=None, data_lanc=None):
+    """Cria no extrato o lançamento de uma parcela de cartão, já com o médico.
+    Por padrão usa a data prevista da parcela e marca a parcela como recebida.
+    Não duplica: se a parcela já tem lançamento, não faz nada."""
+    if parcela.lancamento_id:
+        return None
+    pgto = parcela.pagamento
+    if conta is None:
+        conta = conta_padrao_cartao()
+    paciente = pgto.agendamento.paciente if pgto.agendamento else (pgto.paciente or '')
+    medico = pgto.agendamento.medico if pgto.agendamento else None
+    data_lanc = data_lanc or parcela.data_prevista
+    desc = f"Cartão {pgto.bandeira} {parcela.numero}/{pgto.num_parcelas} – {paciente}"
+    lanc = LancamentoBancario(
+        conta=conta.nome if conta else 'Cartão',
+        conta_id=conta.id if conta else None,
+        data=data_lanc,
+        descricao=desc,
+        valor=parcela.valor_liquido_parcela,
+        tipo='credito',
+        categoria='Recebimento cartão',
+        origem='cartao',
+        medico=normalizar_nome(medico) if medico else None,
+    )
+    db.session.add(lanc)
+    db.session.flush()
+    parcela.lancamento_id = lanc.id
+    parcela.status = 'recebido'
+    parcela.data_recebimento = data_lanc
+    return lanc
 
 
 # ── ROTAS ────────────────────────────────────────────────────────────────────
@@ -267,6 +309,7 @@ def registrar():
         total_taxa = round(sum(p['taxa_parcela'] for p in parcelas_calc), 2)
         total_liquido = round(valor_bruto - total_taxa, 2)
 
+        conta = conta_padrao_cartao()
         pgto = PagamentoCartao(
             agendamento_id=data.get('agendamento_id'),
             paciente=data['paciente'],
@@ -279,20 +322,25 @@ def registrar():
             valor_taxa=total_taxa,
             valor_liquido=total_liquido,
             data_venda=data_venda,
+            conta_id=conta.id if conta else None,
             observacao=data.get('observacao', ''),
         )
         db.session.add(pgto)
         db.session.flush()
 
         for p in parcelas_calc:
-            db.session.add(ParcelaCartao(
+            parcela = ParcelaCartao(
                 pagamento_id=pgto.id,
                 numero=p['numero'],
                 valor_bruto_parcela=p['valor_bruto_parcela'],
                 taxa_parcela=p['taxa_parcela'],
                 valor_liquido_parcela=p['valor_liquido_parcela'],
                 data_prevista=p['data_prevista'],
-            ))
+            )
+            db.session.add(parcela)
+            db.session.flush()
+            # Lança automaticamente no extrato, na data prevista, já com o médico
+            gerar_lancamento_parcela(parcela, conta=conta)
 
         db.session.commit()
         return jsonify({'ok': True, 'id': pgto.id, 'num_parcelas': num_parcelas,
@@ -304,44 +352,42 @@ def registrar():
 
 @bp.route('/cartao/parcela/<int:id>/receber', methods=['POST'])
 def receber_parcela(id):
-    """Marca a parcela como recebida e cria lançamento bancário."""
+    """Marca a parcela como recebida e cria lançamento bancário (fluxo manual)."""
     parcela = ParcelaCartao.query.get_or_404(id)
-    data_rec = request.json.get('data_recebimento', date.today().isoformat())
+
+    # Já lançada (ex.: automático no registro) — não duplica
+    if parcela.lancamento_id:
+        return jsonify({'ok': True, 'lancamento_id': parcela.lancamento_id, 'ja_lancado': True})
+
+    data_rec = request.json.get('data_recebimento') or date.today().isoformat()
     conta_id = request.json.get('conta_id')
 
-    # Resolve conta bancária
-    conta_obj = None
-    conta_nome = 'Principal'
-    if conta_id:
-        from models import ContaBancaria
-        conta_obj = ContaBancaria.query.get(int(conta_id))
-        if conta_obj:
-            conta_nome = conta_obj.nome
+    conta_obj = ContaBancaria.query.get(int(conta_id)) if conta_id else conta_padrao_cartao()
+    data_lanc = datetime.strptime(data_rec, '%Y-%m-%d').date()
 
-    parcela.status = 'recebido'
-    parcela.data_recebimento = datetime.strptime(data_rec, '%Y-%m-%d').date()
-
-    pgto = parcela.pagamento
-    paciente = pgto.agendamento.paciente if pgto.agendamento else (pgto.paciente or '')
-    desc = f"Cartão {pgto.bandeira} {parcela.numero}/{pgto.num_parcelas} – {paciente}"
-
-    lanc = LancamentoBancario(
-        conta=conta_nome,
-        conta_id=conta_obj.id if conta_obj else None,
-        data=parcela.data_recebimento,
-        descricao=desc,
-        valor=parcela.valor_liquido_parcela,
-        tipo='credito',
-        categoria='Recebimento cartão',
-        origem='cartao',
-        medico=pgto.agendamento.medico if pgto.agendamento else None,
-    )
-    db.session.add(lanc)
-    db.session.flush()
-    parcela.lancamento_id = lanc.id
+    lanc = gerar_lancamento_parcela(parcela, conta=conta_obj, data_lanc=data_lanc)
     db.session.commit()
 
-    return jsonify({'ok': True, 'lancamento_id': lanc.id})
+    return jsonify({'ok': True, 'lancamento_id': lanc.id if lanc else parcela.lancamento_id})
+
+
+@bp.route('/cartao/gerar-lancamentos-pendentes', methods=['POST'])
+def gerar_lancamentos_pendentes():
+    """Cria no extrato os lançamentos das parcelas de cartão ainda sem lançamento,
+    cada uma na sua data prevista, com o médico. Para trazer o histórico já registrado."""
+    pendentes = ParcelaCartao.query.join(PagamentoCartao).filter(
+        PagamentoCartao.status == 'ativo',
+        ParcelaCartao.lancamento_id.is_(None),
+        ParcelaCartao.status != 'cancelado',
+    ).all()
+    conta = conta_padrao_cartao()
+    criados = 0
+    for parcela in pendentes:
+        if gerar_lancamento_parcela(parcela, conta=conta):
+            criados += 1
+    if criados:
+        db.session.commit()
+    return jsonify({'ok': True, 'criados': criados, 'analisados': len(pendentes)})
 
 
 @bp.route('/cartao/<int:id>/cancelar', methods=['POST'])
