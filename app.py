@@ -452,6 +452,19 @@ def get_banks(company_id):
 def get_professionals(company_id):
     return q("SELECT * FROM professionals WHERE company_id=? AND active=1 ORDER BY name", (company_id,))
 
+def get_or_create_professional_id(company_id, medico_nome):
+    """Retorna o id do profissional com esse nome na empresa (casando sem diferenciar
+    maiusculas/espacos duplicados). Cria o cadastro se nao existir. Retorna None se
+    o nome estiver vazio. Usado para vincular pagamentos de agendamento ao profissional."""
+    if not medico_nome or not str(medico_nome).strip():
+        return None
+    nome = " ".join(str(medico_nome).split()).strip()
+    achado = q("""SELECT id FROM professionals WHERE company_id=? AND LOWER(TRIM(name))=LOWER(?)
+                  ORDER BY active DESC, id LIMIT 1""", (company_id, nome))
+    if not achado.empty:
+        return int(achado.iloc[0]["id"])
+    return run_insert_id("INSERT INTO professionals (company_id, name, active) VALUES (?,?,1)", (company_id, nome))
+
 @st.cache_data(ttl=120)
 def get_categories(company_id, type_filter=None):
     if type_filter:
@@ -1032,6 +1045,42 @@ elif page == "Transferencia":
 
 elif page == "Extrato":
     st.title("Extrato de Transacoes")
+
+    with st.expander("🔗 Vincular profissionais aos lancamentos (corrige filtro por medico)"):
+        st.caption("Preenche o profissional nos lancamentos de agendamento que estao sem vinculo, "
+                   "usando o medico do agendamento. Necessario para o filtro por profissional funcionar.")
+        alvo = q("""SELECT COUNT(*) AS c FROM transactions t
+                    JOIN agendamentos a ON t.agendamento_id = a.id
+                    WHERE t.company_id=? AND t.professional_id IS NULL
+                      AND a.medico IS NOT NULL AND a.medico != ''""", (cid,))
+        n_alvo = int(alvo.iloc[0]["c"]) if not alvo.empty else 0
+        sem_ag = q("""SELECT COUNT(*) AS c FROM transactions
+                      WHERE company_id=? AND professional_id IS NULL
+                        AND (agendamento_id IS NULL OR agendamento_id NOT IN
+                             (SELECT id FROM agendamentos WHERE company_id=?))""", (cid, cid))
+        n_sem_ag = int(sem_ag.iloc[0]["c"]) if not sem_ag.empty else 0
+        st.write(f"Lancamentos sem profissional que podem ser vinculados pelo agendamento: **{n_alvo}**")
+        if n_sem_ag:
+            st.caption(f"Obs.: {n_sem_ag} lancamento(s) sem profissional NAO tem agendamento vinculado "
+                       "(nesses o profissional precisa ser ajustado manualmente).")
+        if st.button("Vincular agora", key="btn_vinc_prof", type="primary", disabled=(n_alvo == 0)):
+            faltantes = q("""SELECT DISTINCT a.medico FROM transactions t
+                             JOIN agendamentos a ON t.agendamento_id = a.id
+                             WHERE t.company_id=? AND t.professional_id IS NULL
+                               AND a.medico IS NOT NULL AND a.medico != ''""", (cid,))
+            for _, fr in faltantes.iterrows():
+                med = fr["medico"]
+                pid = get_or_create_professional_id(cid, med)
+                if pid:
+                    run("""UPDATE transactions SET professional_id=?
+                           WHERE company_id=? AND professional_id IS NULL
+                             AND agendamento_id IN
+                                 (SELECT id FROM agendamentos WHERE company_id=? AND medico=?)""",
+                        (pid, cid, cid, med))
+            st.cache_data.clear()
+            st.success(f"Pronto! {n_alvo} lancamento(s) vinculado(s) ao profissional.")
+            st.rerun()
+
     today = date.today()
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
@@ -2059,6 +2108,7 @@ if page == "Agendamentos":
                          ag_tipo, ag_valor, ag_forma_sel, ag_bandeira, int(ag_parcelas)))
 
                     # Lanca parcelas no financeiro se pagamento em cartao
+                    prof_id_ag = get_or_create_professional_id(cid, med_val)
                     if eh_cartao and ag_valor > 0:
                         import uuid as _uuid
                         cf_s = get_card_fees(cid)
@@ -2076,11 +2126,11 @@ if page == "Agendamentos":
                             else:
                                 dt_caixa = (data_base + timedelta(days=dias_s * i)).strftime("%Y-%m-%d")
                             run("""INSERT INTO transactions
-                                (company_id, type, description, amount,
+                                (company_id, professional_id, type, description, amount,
                                  date_competencia, date_caixa, payment_method,
                                  status, installment_group, installment_num, installment_total, notes, agendamento_id)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                                (cid, "receita",
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (cid, prof_id_ag, "receita",
                                  f"{ag_tipo} - {ag_paciente.strip()} ({ag_forma_sel} {i}/{n_s})",
                                  liq_p_s,
                                  ag_data.strftime("%Y-%m-%d"), dt_caixa,
@@ -2315,6 +2365,7 @@ if page == "Agendamentos":
                             rows_tx = []  # acumula todos os inserts para fazer de uma vez
                             desc_base = f"{row['tipo_consulta'] or 'Consulta'} - {row['paciente']}"
                             dt_comp = p_data.strftime("%Y-%m-%d")
+                            prof_id_pag = get_or_create_professional_id(cid, row["medico"])
 
                             for f_sel, f_val, f_banco, f_band, f_parc, taxa_p, dias_p in pagamentos_config:
                                 if f_val <= 0:
@@ -2328,13 +2379,13 @@ if page == "Agendamentos":
                                     grupo2 = str(_uuid2.uuid4())[:8]
                                     for i in range(1, n_p2 + 1):
                                         dt_cx = (p_data + timedelta(days=dias_p if f_sel == "Debito" else dias_p * i)).strftime("%Y-%m-%d")
-                                        rows_tx.append((cid, bank_id_pag, "receita",
+                                        rows_tx.append((cid, bank_id_pag, prof_id_pag, "receita",
                                             f"{desc_base} ({f_sel} {i}/{n_p2})",
                                             liq_p2, dt_comp, dt_cx, f_sel, "pendente",
                                             grupo2, i, n_p2,
                                             p_obs or f"Taxa {taxa_p:.2f}%. Bruto: {fmt_brl(f_val)}", ag_id))
                                 else:
-                                    rows_tx.append((cid, bank_id_pag, "receita",
+                                    rows_tx.append((cid, bank_id_pag, prof_id_pag, "receita",
                                         f"{desc_base} ({f_sel})",
                                         f_val, dt_comp, dt_comp, f_sel, "pago",
                                         None, None, None,
@@ -2344,10 +2395,10 @@ if page == "Agendamentos":
                             # Um único round-trip ao banco para todos os lançamentos
                             if rows_tx:
                                 run_many("""INSERT INTO transactions
-                                    (company_id, bank_id, type, description, amount,
+                                    (company_id, bank_id, professional_id, type, description, amount,
                                      date_competencia, date_caixa, payment_method, status,
                                      installment_group, installment_num, installment_total, notes, agendamento_id)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
+                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
 
                             formas_str = " + ".join(formas_salvas)
                             run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
