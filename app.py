@@ -1894,6 +1894,68 @@ elif page == "Configuracoes":
                 st.rerun()
 
         st.markdown("---")
+        st.subheader("Mesclar profissionais (nomes diferentes ou parecidos)")
+        st.caption("Para quando o mesmo medico esta com grafias diferentes (ex.: 'RODRIGO' e 'DR RODRIGO'). "
+                   "Escolha os cadastros repetidos e para qual eles devem ir: os lancamentos sao movidos "
+                   "e os cadastros escolhidos ficam desativados.")
+
+        profs_m = q("SELECT id, name, active FROM professionals WHERE company_id=? ORDER BY name, id", (cid,))
+        if profs_m.empty:
+            st.info("Nenhum profissional cadastrado.")
+        else:
+            def _primeiro_nome(n):
+                toks = [t for t in chave_nome(n).split() if t not in ("dr", "dra", "dr.", "dra.")]
+                return toks[0] if toks else chave_nome(n)
+
+            sugestoes = {}
+            for _, r in profs_m.iterrows():
+                sugestoes.setdefault(_primeiro_nome(r["name"]), []).append(
+                    f'{r["name"]} (id {int(r["id"])}, {mapa_qtd.get(int(r["id"]), 0)} lanc)')
+            parecidos = {k: v for k, v in sugestoes.items() if len(v) > 1}
+            if parecidos:
+                st.info("**Possiveis duplicados por semelhanca:**\n\n" + "\n".join(
+                    f"- **{k.upper()}**: " + "  |  ".join(v) for k, v in sorted(parecidos.items())))
+
+            rot = {}
+            for _, r in profs_m.iterrows():
+                pid = int(r["id"])
+                marca = "" if int(r["active"] or 0) == 1 else " [inativo]"
+                rot[f'{r["name"]} (id {pid}) - {mapa_qtd.get(pid, 0)} lanc{marca}'] = pid
+
+            origem_lbl = st.multiselect("Cadastros a MESCLAR (serao desativados)", list(rot.keys()), key="merge_src")
+            destino_lbl = st.selectbox("Cadastro que FICA", list(rot.keys()), key="merge_dst")
+
+            if origem_lbl and destino_lbl:
+                dst = rot[destino_lbl]
+                srcs = [rot[l] for l in origem_lbl if rot[l] != dst]
+                if not srcs:
+                    st.warning("Escolha ao menos um cadastro diferente do que vai ficar.")
+                else:
+                    dst_nome = str(profs_m[profs_m["id"] == dst].iloc[0]["name"])
+                    total_mover = sum(mapa_qtd.get(s, 0) for s in srcs)
+                    st.warning(f"{len(srcs)} cadastro(s) serao mesclados em **{dst_nome}**, "
+                               f"movendo {total_mover} lancamento(s).")
+                    if st.button("Mesclar agora", key="btn_merge_manual", type="primary"):
+                        nomes_src = [str(profs_m[profs_m["id"] == s].iloc[0]["name"]) for s in srcs]
+                        for s in srcs:
+                            run("UPDATE transactions SET professional_id=? WHERE company_id=? AND professional_id=?",
+                                (dst, cid, s))
+                            run("UPDATE professionals SET active=0 WHERE id=?", (s,))
+                        run("UPDATE professionals SET active=1 WHERE id=?", (dst,))
+                        # Alinha o nome do medico nos agendamentos
+                        ags_m = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != ''", (cid,))
+                        if not ags_m.empty:
+                            chaves_src = {chave_nome(n) for n in nomes_src}
+                            for _, ar in ags_m.iterrows():
+                                if chave_nome(ar["medico"]) in chaves_src:
+                                    run("UPDATE agendamentos SET medico=? WHERE company_id=? AND medico=?",
+                                        (dst_nome, cid, ar["medico"]))
+                        st.cache_data.clear()
+                        st.success(f"{len(srcs)} cadastro(s) mesclado(s) em '{dst_nome}'. "
+                                   f"{total_mover} lancamento(s) movido(s).")
+                        st.rerun()
+
+        st.markdown("---")
         st.subheader("Unificar Nomes de Profissional (nomes diferentes)")
         st.caption("Use quando o mesmo medico esta com grafias diferentes. Move os lancamentos do "
                    "nome errado para o correto, alem de atualizar agendamentos.")
