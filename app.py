@@ -1046,6 +1046,59 @@ elif page == "Transferencia":
 elif page == "Extrato":
     st.title("Extrato de Transacoes")
 
+    with st.expander("🔍 Diagnostico do vinculo de profissionais"):
+        st.caption("Somente leitura. Mostra por que o filtro por medico pode nao estar encontrando lancamentos.")
+
+        def _c(sql, p):
+            r = q(sql, p)
+            return int(r.iloc[0]["c"]) if not r.empty else 0
+
+        d_total   = _c("SELECT COUNT(*) AS c FROM transactions WHERE company_id=?", (cid,))
+        d_nulos   = _c("SELECT COUNT(*) AS c FROM transactions WHERE company_id=? AND professional_id IS NULL", (cid,))
+        d_orfaos  = _c("""SELECT COUNT(*) AS c FROM transactions t WHERE t.company_id=?
+                          AND t.professional_id IS NOT NULL
+                          AND NOT EXISTS (SELECT 1 FROM professionals p WHERE p.id = t.professional_id)""", (cid,))
+        d_ok      = _c("""SELECT COUNT(*) AS c FROM transactions t WHERE t.company_id=?
+                          AND t.professional_id IS NOT NULL
+                          AND EXISTS (SELECT 1 FROM professionals p WHERE p.id = t.professional_id)""", (cid,))
+        d_inativo = _c("""SELECT COUNT(*) AS c FROM transactions t WHERE t.company_id=?
+                          AND EXISTS (SELECT 1 FROM professionals p
+                                      WHERE p.id = t.professional_id AND p.active <> 1)""", (cid,))
+        p_total   = _c("SELECT COUNT(*) AS c FROM professionals WHERE company_id=?", (cid,))
+        p_ativos  = _c("SELECT COUNT(*) AS c FROM professionals WHERE company_id=? AND active=1", (cid,))
+
+        st.write(f"**Empresa selecionada (company_id): {cid}**")
+        c_a, c_b, c_c = st.columns(3)
+        c_a.metric("Lancamentos", d_total)
+        c_b.metric("Com profissional OK", d_ok)
+        c_c.metric("Sem profissional (nulo)", d_nulos)
+        c_d, c_e, c_f = st.columns(3)
+        c_d.metric("Profissional ORFAO", d_orfaos, help="Aponta para um profissional que nao existe")
+        c_e.metric("Profissionais cadastrados", p_total)
+        c_f.metric("Profissionais ativos", p_ativos)
+        if d_inativo:
+            st.caption(f"{d_inativo} lancamento(s) apontam para profissional DESATIVADO (nao aparece no filtro).")
+
+        st.markdown("**Ids de profissional usados pelos lancamentos:**")
+        ids_uso = q("""SELECT t.professional_id AS id, COUNT(*) AS qtd,
+                              COALESCE(MAX(p.name), '(NAO EXISTE)') AS nome,
+                              COALESCE(MAX(p.active), -1) AS ativo
+                       FROM transactions t
+                       LEFT JOIN professionals p ON p.id = t.professional_id
+                       WHERE t.company_id=? AND t.professional_id IS NOT NULL
+                       GROUP BY t.professional_id ORDER BY qtd DESC""", (cid,))
+        if ids_uso.empty:
+            st.info("Nenhum lancamento com professional_id preenchido.")
+        else:
+            st.dataframe(ids_uso, use_container_width=True, hide_index=True)
+
+        st.markdown("**Profissionais cadastrados nesta empresa:**")
+        p_lista = q("SELECT id, name, active FROM professionals WHERE company_id=? ORDER BY id", (cid,))
+        if p_lista.empty:
+            st.warning("Nenhum profissional cadastrado nesta empresa!")
+        else:
+            st.dataframe(p_lista, use_container_width=True, hide_index=True)
+
     with st.expander("🔗 Vincular profissionais aos lancamentos (corrige filtro por medico)"):
         st.caption("Preenche o profissional nos lancamentos de agendamento que estao sem vinculo, "
                    "usando o medico do agendamento. Necessario para o filtro por profissional funcionar.")
