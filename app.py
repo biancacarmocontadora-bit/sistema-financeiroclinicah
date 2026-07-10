@@ -452,17 +452,27 @@ def get_banks(company_id):
 def get_professionals(company_id):
     return q("SELECT * FROM professionals WHERE company_id=? AND active=1 ORDER BY name", (company_id,))
 
+def chave_nome(nome):
+    """Chave de comparacao de nomes: sem maiusculas, sem espacos duplicados nem sobras.
+    'DRA  Carolina ' e 'dra carolina' viram a mesma chave."""
+    return " ".join(str(nome or "").split()).strip().lower()
+
 def get_or_create_professional_id(company_id, medico_nome):
     """Retorna o id do profissional com esse nome na empresa (casando sem diferenciar
-    maiusculas/espacos duplicados). Cria o cadastro se nao existir. Retorna None se
+    maiusculas nem espacos duplicados). Cria o cadastro se nao existir. Retorna None se
     o nome estiver vazio. Usado para vincular pagamentos de agendamento ao profissional."""
     if not medico_nome or not str(medico_nome).strip():
         return None
     nome = " ".join(str(medico_nome).split()).strip()
-    achado = q("""SELECT id FROM professionals WHERE company_id=? AND LOWER(TRIM(name))=LOWER(?)
-                  ORDER BY active DESC, id LIMIT 1""", (company_id, nome))
-    if not achado.empty:
-        return int(achado.iloc[0]["id"])
+    alvo = chave_nome(nome)
+    existentes = q("SELECT id, name, active FROM professionals WHERE company_id=?", (company_id,))
+    if not existentes.empty:
+        # Prefere um cadastro ativo; entre iguais, o de menor id
+        candidatos = [(int(r["id"]), int(r["active"] or 0))
+                      for _, r in existentes.iterrows() if chave_nome(r["name"]) == alvo]
+        if candidatos:
+            candidatos.sort(key=lambda t: (0 if t[1] == 1 else 1, t[0]))
+            return candidatos[0][0]
     return run_insert_id("INSERT INTO professionals (company_id, name, active) VALUES (?,?,1)", (company_id, nome))
 
 @st.cache_data(ttl=120)
@@ -1838,14 +1848,61 @@ elif page == "Configuracoes":
                 st.rerun()
 
         st.markdown("---")
-        st.subheader("Unificar Nomes de Profissional")
-        st.caption("Substitui um nome antigo pelo nome correto em agendamentos e lancamentos financeiros.")
+        st.subheader("Profissionais duplicados (mesmo nome)")
+        st.caption("Mesmo nome cadastrado mais de uma vez. Unificar move os lancamentos para um "
+                   "unico cadastro e desativa os extras — o filtro por medico volta a encontrar tudo.")
 
-        # Coleta todos os nomes distintos de medico nos agendamentos + tabela professionals
+        profs_all = q("SELECT id, name, active FROM professionals WHERE company_id=? ORDER BY id", (cid,))
+        cnt_tx = q("""SELECT professional_id AS pid, COUNT(*) AS qtd FROM transactions
+                      WHERE company_id=? AND professional_id IS NOT NULL
+                      GROUP BY professional_id""", (cid,))
+        mapa_qtd = {int(r["pid"]): int(r["qtd"]) for _, r in cnt_tx.iterrows()} if not cnt_tx.empty else {}
+
+        grupos = {}
+        if not profs_all.empty:
+            for _, r in profs_all.iterrows():
+                grupos.setdefault(chave_nome(r["name"]), []).append(
+                    (int(r["id"]), str(r["name"]), int(r["active"] or 0)))
+        dup_grupos = {k: v for k, v in grupos.items() if len(v) > 1}
+
+        if not dup_grupos:
+            st.success("Nenhum profissional duplicado nesta empresa.")
+        else:
+            linhas = []
+            for _, membros in sorted(dup_grupos.items()):
+                for pid, nome, ativo in sorted(membros, key=lambda m: m[0]):
+                    linhas.append({"id": pid, "nome": nome, "ativo": ativo,
+                                   "lancamentos": mapa_qtd.get(pid, 0)})
+            st.dataframe(pd.DataFrame(linhas), use_container_width=True, hide_index=True)
+            st.warning(f"{len(dup_grupos)} nome(s) duplicado(s). Ao unificar, os lancamentos de todos "
+                       "os cadastros repetidos passam para um so (o ativo de menor id).")
+            if st.button("Unificar duplicados agora", key="btn_merge_dup", type="primary"):
+                mesclados = 0
+                for _, membros in dup_grupos.items():
+                    # mantem o ativo de menor id; se nenhum ativo, o de menor id
+                    ordenados = sorted(membros, key=lambda m: (0 if m[2] == 1 else 1, m[0]))
+                    manter = ordenados[0][0]
+                    for rid, _nome, _ativo in ordenados[1:]:
+                        run("UPDATE transactions SET professional_id=? WHERE company_id=? AND professional_id=?",
+                            (manter, cid, rid))
+                        run("UPDATE professionals SET active=0 WHERE id=?", (rid,))
+                        mesclados += 1
+                    nome_limpo = " ".join(str(ordenados[0][1]).split()).strip()
+                    run("UPDATE professionals SET active=1, name=? WHERE id=?", (nome_limpo, manter))
+                st.cache_data.clear()
+                st.success(f"Duplicados unificados! {mesclados} cadastro(s) extra(s) mesclado(s).")
+                st.rerun()
+
+        st.markdown("---")
+        st.subheader("Unificar Nomes de Profissional (nomes diferentes)")
+        st.caption("Use quando o mesmo medico esta com grafias diferentes. Move os lancamentos do "
+                   "nome errado para o correto, alem de atualizar agendamentos.")
+
+        # Todos os nomes (inclusive de cadastros desativados) + medicos dos agendamentos
+        nomes_prof = q("SELECT DISTINCT name FROM professionals WHERE company_id=? ORDER BY name", (cid,))
         nomes_ag = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != '' ORDER BY medico", (cid,))
-        nomes_tx = q("SELECT DISTINCT description FROM transactions WHERE company_id=? ORDER BY description", (cid,))
         todos_medicos = sorted(set(
-            (df_prof["name"].tolist() if not df_prof.empty else []) +
+            (nomes_prof["name"].tolist() if not nomes_prof.empty else []) +
             (nomes_ag["medico"].tolist() if not nomes_ag.empty else [])
         ))
 
@@ -1858,21 +1915,34 @@ elif page == "Configuracoes":
 
             if nome_de != nome_para:
                 if st.button("Unificar agora", key="btn_unif", type="primary"):
-                    # Atualiza agendamentos
-                    run("UPDATE agendamentos SET medico=? WHERE company_id=? AND medico=?", (nome_para, cid, nome_de))
-                    # Atualiza descriptions nas transactions (LIKE para pegar parcelas)
-                    df_tx_upd = q("SELECT id, description FROM transactions WHERE company_id=? AND description LIKE ?",
-                                  (cid, f"%{nome_de}%"))
-                    if not df_tx_upd.empty:
-                        for _, r in df_tx_upd.iterrows():
-                            nova_desc = str(r["description"]).replace(nome_de, nome_para)
-                            run("UPDATE transactions SET description=? WHERE id=?", (nova_desc, int(r["id"])))
-                    # Desativa o nome errado na tabela professionals se existir
-                    run("UPDATE professionals SET active=0 WHERE company_id=? AND name=?", (cid, nome_de))
-                    st.success(f"Feito! '{nome_de}' substituido por '{nome_para}' em todos os registros.")
+                    destino_id = get_or_create_professional_id(cid, nome_para)
+                    # Move os lancamentos de TODOS os cadastros com o nome errado
+                    # (comparando sem maiusculas nem espacos duplicados)
+                    todos_p = q("SELECT id, name FROM professionals WHERE company_id=?", (cid,))
+                    alvo = chave_nome(nome_de)
+                    movidos = 0
+                    if destino_id and not todos_p.empty:
+                        for _, rr in todos_p.iterrows():
+                            rid = int(rr["id"])
+                            if rid == destino_id or chave_nome(rr["name"]) != alvo:
+                                continue
+                            run("UPDATE transactions SET professional_id=? WHERE company_id=? AND professional_id=?",
+                                (destino_id, cid, rid))
+                            run("UPDATE professionals SET active=0 WHERE id=?", (rid,))
+                            movidos += 1
+                    # Atualiza agendamentos (todas as grafias equivalentes do nome errado)
+                    ags = q("SELECT DISTINCT medico FROM agendamentos WHERE company_id=? AND medico IS NOT NULL AND medico != ''", (cid,))
+                    if not ags.empty:
+                        for _, ar in ags.iterrows():
+                            if chave_nome(ar["medico"]) == alvo:
+                                run("UPDATE agendamentos SET medico=? WHERE company_id=? AND medico=?",
+                                    (nome_para, cid, ar["medico"]))
+                    st.cache_data.clear()
+                    st.success(f"Feito! '{nome_de}' unificado em '{nome_para}'. "
+                               f"{movidos} cadastro(s) mesclado(s) e seus lancamentos movidos.")
                     st.rerun()
         else:
-            st.info("Nenhum profissional cadastrado nos agendamentos.")
+            st.info("Nenhum profissional cadastrado.")
 
     with tab3:
         st.subheader("Categorias de Receita")
