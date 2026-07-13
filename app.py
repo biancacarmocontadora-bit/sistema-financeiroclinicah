@@ -1470,6 +1470,18 @@ elif page == "Conciliacao Bancaria":
             mc3.metric("Saldo extrato", fmt_brl(total_cred - total_deb))
             mc4.metric("Conciliados", f"{int(conc_count)}/{len(df_ext)}")
 
+            with st.expander(f"🗑️ Excluir TODO o extrato deste periodo ({len(df_ext)} lancamento(s))"):
+                st.caption(f"Remove os {len(df_ext)} lancamento(s) do extrato do banco '{banco_conc}' entre "
+                           f"{dt_conc_ini.strftime('%d/%m/%Y')} e {dt_conc_fim.strftime('%d/%m/%Y')} "
+                           "(conciliados e pendentes). Isso apaga apenas o extrato importado — seus "
+                           "lancamentos financeiros NAO sao afetados.")
+                conf_del_all = st.checkbox("Confirmo que quero excluir todos deste periodo", key="conf_del_all_ext")
+                if st.button("Excluir tudo agora", type="primary", disabled=not conf_del_all, key="btn_del_all_ext"):
+                    run("DELETE FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?",
+                        (cid, bank_id_conc, dt_conc_ini.strftime("%Y-%m-%d"), dt_conc_fim.strftime("%Y-%m-%d")))
+                    st.success(f"{len(df_ext)} lancamento(s) do extrato excluido(s).")
+                    st.rerun()
+
             st.markdown("---")
             st.markdown("**Lancamentos pendentes de conciliacao**")
 
