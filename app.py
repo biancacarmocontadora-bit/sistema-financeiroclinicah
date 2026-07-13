@@ -457,6 +457,45 @@ def chave_nome(nome):
     'DRA  Carolina ' e 'dra carolina' viram a mesma chave."""
     return " ".join(str(nome or "").split()).strip().lower()
 
+def parse_ofx_extrato(arquivo):
+    """Le um arquivo OFX (formato SGML antigo ou XML) e devolve um DataFrame com as
+    colunas Data (dd/mm/aaaa), Descricao e Valor (no formato brasileiro, ex.: '-150,00').
+    Parser proprio, sem dependencia externa, para nao afetar o deploy."""
+    import re as _re
+    dados = arquivo.read()
+    texto = None
+    if isinstance(dados, bytes):
+        for enc in ("utf-8", "latin-1", "cp1252"):
+            try:
+                texto = dados.decode(enc)
+                break
+            except Exception:
+                continue
+        if texto is None:
+            texto = dados.decode("utf-8", errors="ignore")
+    else:
+        texto = str(dados)
+
+    def campo(bloco, tag):
+        m = _re.search(r"<%s>([^<\r\n]+)" % tag, bloco, _re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    linhas = []
+    for bloco in _re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto, _re.DOTALL | _re.IGNORECASE):
+        dt = campo(bloco, "DTPOSTED")[:8]
+        try:
+            data_fmt = datetime.strptime(dt, "%Y%m%d").strftime("%d/%m/%Y")
+        except Exception:
+            continue
+        try:
+            valor = float(campo(bloco, "TRNAMT").replace(",", "."))
+        except Exception:
+            continue
+        desc = campo(bloco, "MEMO") or campo(bloco, "NAME") or "Lancamento"
+        linhas.append({"Data": data_fmt, "Descricao": desc,
+                       "Valor": f"{valor:.2f}".replace(".", ",")})
+    return pd.DataFrame(linhas, columns=["Data", "Descricao", "Valor"])
+
 def get_or_create_professional_id(company_id, medico_nome):
     """Retorna o id do profissional com esse nome na empresa (casando sem diferenciar
     maiusculas nem espacos duplicados). Cria o cadastro se nao existir. Retorna None se
@@ -1294,18 +1333,25 @@ elif page == "Conciliacao Bancaria":
 
     # ── TAB 1: IMPORTAR EXTRATO ────────────────────────────────────────────────
     with tab_import:
-        st.subheader("Importar Extrato Bancario (Excel/CSV)")
-        st.info("O arquivo deve ter colunas: **Data**, **Descricao**, **Valor** (positivo=entrada, negativo=saida) ou colunas **Credito**/**Debito** separadas.")
+        st.subheader("Importar Extrato Bancario (Excel/CSV/OFX)")
+        st.info("Aceita **OFX** (do internet banking) ou planilha **Excel/CSV** com colunas "
+                "**Data**, **Descricao**, **Valor** (positivo=entrada, negativo=saida) ou colunas "
+                "**Credito**/**Debito** separadas. No OFX as colunas ja vem prontas.")
 
         col_up1, col_up2 = st.columns(2)
         with col_up1:
             banco_imp = st.selectbox("Banco do Extrato", list(bank_opts.keys()), key="imp_banco")
         with col_up2:
-            arq = st.file_uploader("Arquivo (.xlsx ou .csv)", type=["xlsx", "xls", "csv"], key="imp_arq")
+            arq = st.file_uploader("Arquivo (.ofx, .xlsx ou .csv)", type=["ofx", "xlsx", "xls", "csv"], key="imp_arq")
 
         if arq:
             try:
-                if arq.name.endswith(".csv"):
+                nome_arq = arq.name.lower()
+                if nome_arq.endswith(".ofx"):
+                    df_raw = parse_ofx_extrato(arq)
+                    if df_raw.empty:
+                        st.warning("Nenhuma transacao encontrada no arquivo OFX. Confira se o arquivo esta correto.")
+                elif nome_arq.endswith(".csv"):
                     df_raw = pd.read_csv(arq, sep=None, engine="python", dtype=str)
                 else:
                     df_raw = pd.read_excel(arq, dtype=str)
