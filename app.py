@@ -1223,6 +1223,20 @@ elif page == "Extrato":
                           FROM transactions WHERE company_id=? AND agendamento_id IS NULL""", (cid,))
             ags_all = q("""SELECT id, paciente, data_hora FROM agendamentos
                            WHERE company_id=? AND status='realizado'""", (cid,))
+            st.info(f"Lancamentos SEM agendamento: **{len(tx_sem)}** · "
+                    f"Agendamentos realizados: **{len(ags_all)}**")
+            dcol1, dcol2 = st.columns(2)
+            with dcol1:
+                st.write("**Exemplos de descricoes de lancamentos:**")
+                if not tx_sem.empty:
+                    st.dataframe(tx_sem[["id", "description", "amount"]].head(10),
+                                 use_container_width=True, hide_index=True)
+            with dcol2:
+                st.write("**Exemplos de pacientes (agendamentos):**")
+                if not ags_all.empty:
+                    st.dataframe(ags_all[["id", "paciente", "data_hora"]].head(10),
+                                 use_container_width=True, hide_index=True)
+
             if tx_sem.empty:
                 st.success("Todos os lancamentos ja estao ligados a um agendamento.")
             elif ags_all.empty:
