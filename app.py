@@ -1213,6 +1213,64 @@ elif page == "Extrato":
             st.success(f"Pronto! {n_alvo} lancamento(s) vinculado(s) ao profissional.")
             st.rerun()
 
+    with st.expander("🔗 Vincular lancamentos aos agendamentos (para conciliar por paciente)"):
+        st.caption("Liga lancamentos que estao SEM agendamento ao atendimento correspondente, casando o "
+                   "nome do paciente na descricao com o agendamento de data mais proxima. "
+                   "Necessario para os PIX/dinheiro aparecerem como conciliados ao conciliar por paciente. "
+                   "Revise a lista antes de aplicar.")
+        if st.checkbox("Procurar vinculos automaticos (por paciente)", key="chk_link_ag"):
+            tx_sem = q("""SELECT id, description, amount, date_competencia
+                          FROM transactions WHERE company_id=? AND agendamento_id IS NULL""", (cid,))
+            ags_all = q("""SELECT id, paciente, data_hora FROM agendamentos
+                           WHERE company_id=? AND status='realizado'""", (cid,))
+            if tx_sem.empty:
+                st.success("Todos os lancamentos ja estao ligados a um agendamento.")
+            elif ags_all.empty:
+                st.info("Nenhum agendamento realizado para casar.")
+            else:
+                import unicodedata
+                def _norm(s):
+                    s = "".join(ch for ch in unicodedata.normalize("NFD", str(s or ""))
+                                if unicodedata.category(ch) != "Mn")
+                    return " ".join(s.upper().split())
+
+                ags_list = []
+                for _, a in ags_all.iterrows():
+                    pac = _norm(a["paciente"])
+                    if len(pac) >= 5:  # ignora nomes curtos demais para evitar falso positivo
+                        ags_list.append((int(a["id"]), pac, str(a["data_hora"])[:10]))
+
+                def _dist(adt, dtx):
+                    try:
+                        return abs((date.fromisoformat(adt) - date.fromisoformat(dtx)).days)
+                    except Exception:
+                        return 99999
+
+                propostas = []
+                for _, t in tx_sem.iterrows():
+                    desc = _norm(t["description"])
+                    dtx = str(t["date_competencia"])[:10]
+                    candidatos = [(aid, pac, adt) for (aid, pac, adt) in ags_list if pac in desc]
+                    if not candidatos:
+                        continue
+                    aid, pac, adt = min(candidatos, key=lambda c: _dist(c[2], dtx))
+                    propostas.append({"lanc_id": int(t["id"]), "descricao": str(t["description"])[:50],
+                                      "valor": float(t["amount"] or 0), "agendamento": aid,
+                                      "paciente": pac, "data_ag": adt})
+
+                st.write(f"Lancamentos sem agendamento: **{len(tx_sem)}** · Vinculos propostos: **{len(propostas)}**")
+                if propostas:
+                    st.dataframe(pd.DataFrame(propostas), use_container_width=True, hide_index=True)
+                    if st.button("Aplicar vinculos", key="btn_link_ag", type="primary"):
+                        for p in propostas:
+                            run("UPDATE transactions SET agendamento_id=? WHERE id=? AND company_id=?",
+                                (int(p["agendamento"]), int(p["lanc_id"]), cid))
+                        st.cache_data.clear()
+                        st.success(f"{len(propostas)} lancamento(s) vinculado(s) ao agendamento!")
+                        st.rerun()
+                else:
+                    st.info("Nenhum vinculo automatico encontrado (o nome do paciente nao aparece nas descricoes).")
+
     today = date.today()
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
