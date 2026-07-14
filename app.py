@@ -803,6 +803,7 @@ elif page == "Bancos":
             if st.form_submit_button("Adicionar"):
                 if nb_nome:
                     run("INSERT INTO banks (company_id, name, account_type, balance_initial) VALUES (?,?,?,?)", (cid, nb_nome, nb_tipo, nb_saldo))
+                    st.cache_data.clear()
                     st.success("Banco adicionado!")
                     st.rerun()
                 else:
@@ -825,11 +826,13 @@ elif page == "Bancos":
         with c1:
             if st.button("Salvar Alteracoes", key="save_bank"):
                 run("UPDATE banks SET name=?, account_type=?, balance_initial=? WHERE id=?", (new_name, new_type, new_bal, int(b_row["id"])))
+                st.cache_data.clear()
                 st.success("Banco atualizado!")
                 st.rerun()
         with c2:
             if st.button("Desativar Banco", key="del_bank"):
                 run("UPDATE banks SET active=0 WHERE id=?", (int(b_row["id"]),))
+                st.cache_data.clear()
                 st.success("Banco desativado.")
                 st.rerun()
 
@@ -2025,6 +2028,7 @@ elif page == "Configuracoes":
             if st.form_submit_button("Adicionar"):
                 if p_nome:
                     run("INSERT INTO professionals (company_id, name, role) VALUES (?,?,?)", (cid, p_nome, p_cargo))
+                    st.cache_data.clear()
                     st.success("Profissional adicionado!")
                     st.rerun()
         if not df_prof.empty:
@@ -2033,6 +2037,7 @@ elif page == "Configuracoes":
             if st.button("Desativar", key="del_prof_btn"):
                 p_id = int(df_prof[df_prof["name"] == p_sel].iloc[0]["id"])
                 run("UPDATE professionals SET active=0 WHERE id=?", (p_id,))
+                st.cache_data.clear()
                 st.success("Profissional desativado.")
                 st.rerun()
 
@@ -2211,6 +2216,7 @@ elif page == "Configuracoes":
             if st.form_submit_button("Adicionar"):
                 if c_nome:
                     run("INSERT INTO categories (company_id, name, type) VALUES (?,?,?)", (cid, c_nome, c_tipo))
+                    st.cache_data.clear()
                     st.success("Categoria adicionada!")
                     st.rerun()
 
