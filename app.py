@@ -1318,6 +1318,8 @@ elif page == "Extrato":
         st.caption("Para atendimentos marcados como realizados cujo pagamento nunca foi lancado no "
                    "financeiro (por isso nao aparecem no extrato). Gera uma receita com o valor do "
                    "agendamento. Revise a lista antes de aplicar; nao cria duplicado.")
+        if st.session_state.get("gen_ag_msg"):
+            st.success(st.session_state.pop("gen_ag_msg"))
         if st.checkbox("Procurar agendamentos sem lancamento", key="chk_gen_ag"):
             banks_g = get_banks(cid)
             if banks_g.empty:
@@ -1377,7 +1379,7 @@ elif page == "Extrato":
                                 (cid, bid_g, pid_g, "receita", f"Consulta - {p['paciente']}",
                                  p["valor"], p["data"], p["data"], forma_g, "pago", p["agendamento"]))
                         st.cache_data.clear()
-                        st.success(f"{len(propostas_g)} lancamento(s) gerado(s)! Agora aparecem no extrato.")
+                        st.session_state["gen_ag_msg"] = f"{len(propostas_g)} lancamento(s) gerado(s)! Ja aparecem no extrato."
                         st.rerun()
                 else:
                     st.success("Nenhum agendamento realizado sem lancamento (ou ja existe lancamento equivalente).")
