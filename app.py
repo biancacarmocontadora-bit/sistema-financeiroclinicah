@@ -1618,14 +1618,22 @@ elif page == "Conciliacao Bancaria":
                             for _, pp in profs_conc.iterrows():
                                 prof_opts_g[pp["name"]] = int(pp["id"])
 
+                            try:
+                                data_ext_obj = date.fromisoformat(str(ext_row["data"])[:10])
+                            except Exception:
+                                data_ext_obj = date.today()
+
                             gcol1, gcol2 = st.columns(2)
                             with gcol1:
                                 desc_novo = st.text_input("Descricao do lancamento", value=str(ext_row["descricao"]), key=f"gdesc_{ext_id}")
                                 cat_novo = st.selectbox("Categoria", list(cat_opts_g.keys()), key=f"gcat_{ext_id}")
+                                comp_novo = st.date_input("Data de Competencia", value=data_ext_obj, key=f"gcomp_{ext_id}")
                             with gcol2:
                                 prof_novo = st.selectbox("Profissional (opcional)", list(prof_opts_g.keys()), key=f"gprof_{ext_id}")
                                 st.write(f"Tipo: **{'Receita' if tipo_novo == 'receita' else 'Despesa'}** · "
-                                         f"Valor: **{fmt_brl(ext_row['valor'])}** · Data: **{ext_row['data']}**")
+                                         f"Valor: **{fmt_brl(ext_row['valor'])}**")
+                                st.caption(f"Data de caixa (caiu no banco): {ext_row['data']} · "
+                                           "a competencia voce ajusta ao lado.")
 
                             if st.button("Gerar lancamento e conciliar", key=f"gbtn_{ext_id}", type="primary"):
                                 new_id = run_insert_id("""INSERT INTO transactions
@@ -1633,7 +1641,7 @@ elif page == "Conciliacao Bancaria":
                                      date_competencia, date_caixa, payment_method, status)
                                     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                                     (cid, bank_id_conc, prof_opts_g[prof_novo], cat_opts_g[cat_novo], tipo_novo,
-                                     desc_novo, float(ext_row["valor"]), ext_row["data"], ext_row["data"],
+                                     desc_novo, float(ext_row["valor"]), comp_novo.strftime("%Y-%m-%d"), ext_row["data"],
                                      "conciliacao", "pago"))
                                 run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
                                 run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
