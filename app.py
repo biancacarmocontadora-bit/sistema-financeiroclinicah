@@ -375,6 +375,26 @@ def _ensure_db():
 
 _ensure_db()
 
+def ensure_conciliacao_links():
+    """Garante a tabela de vinculos da conciliacao mesmo em bancos ja existentes
+    (o init_db pode ter rodado antes desta tabela existir). Idempotente e barata."""
+    try:
+        if USE_POSTGRES:
+            run("""CREATE TABLE IF NOT EXISTS conciliacao_links (
+                    id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL,
+                    extrato_id INTEGER NOT NULL, ref_tipo TEXT NOT NULL, ref_id INTEGER NOT NULL)""")
+        else:
+            run("""CREATE TABLE IF NOT EXISTS conciliacao_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, company_id INTEGER NOT NULL,
+                    extrato_id INTEGER NOT NULL, ref_tipo TEXT NOT NULL, ref_id INTEGER NOT NULL)""")
+    except Exception:
+        pass
+
+# Garante a tabela de vinculos uma vez por sessao (cobre Extrato e Conciliacao)
+if not st.session_state.get("_conc_links_ok"):
+    ensure_conciliacao_links()
+    st.session_state["_conc_links_ok"] = True
+
 st.markdown("""
 <style>
 [data-testid="stSidebar"] { background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%); }
