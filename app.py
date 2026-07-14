@@ -1256,8 +1256,12 @@ elif page == "Extrato":
                t.installment_num as "Parc", t.installment_total as "Total_Parc",
                (CASE WHEN EXISTS (SELECT 1 FROM conciliacao_links cl
                                   WHERE cl.company_id=t.company_id AND cl.ref_tipo='transaction' AND cl.ref_id=t.id)
+                       OR (t.agendamento_id IS NOT NULL AND EXISTS (SELECT 1 FROM conciliacao_links cl2
+                                  WHERE cl2.company_id=t.company_id AND cl2.ref_tipo='agendamento' AND cl2.ref_id=t.agendamento_id))
                        OR EXISTS (SELECT 1 FROM extrato_banco eb
                                   WHERE eb.transaction_id=t.id AND eb.conciliado=1)
+                       OR (t.agendamento_id IS NOT NULL AND EXISTS (SELECT 1 FROM extrato_banco eb2
+                                  WHERE eb2.agendamento_id=t.agendamento_id AND eb2.conciliado=1))
                      THEN 1 ELSE 0 END) as "ConcFlag"
         FROM transactions t
         LEFT JOIN banks b ON t.bank_id=b.id
