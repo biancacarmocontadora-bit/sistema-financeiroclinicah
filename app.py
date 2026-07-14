@@ -1502,8 +1502,11 @@ elif page == "Conciliacao Bancaria":
                 # Carrega agendamentos realizados e transacoes para sugerir vinculo
                 df_ags = q("""SELECT id, paciente, data_hora, valor, forma_pagamento, cartao_parcelas
                               FROM agendamentos WHERE company_id=? AND status='realizado'""", (cid,))
-                df_txs = q("SELECT id, description, amount, date_caixa, payment_method FROM transactions WHERE company_id=? AND bank_id=?",
-                           (cid, bank_id_conc))
+                df_txs = q("""SELECT t.id, t.description, t.amount, t.date_caixa, t.payment_method,
+                                     a.paciente AS paciente
+                              FROM transactions t
+                              LEFT JOIN agendamentos a ON t.agendamento_id = a.id
+                              WHERE t.company_id=? AND t.bank_id=?""", (cid, bank_id_conc))
 
                 # Calcula o valor liquido do agendamento (desconta a taxa do cartao),
                 # que e o valor que realmente cai no banco.
@@ -1545,7 +1548,18 @@ elif page == "Conciliacao Bancaria":
                                 ag_map[lbl] = (int(r["id"]), liq)
                             tx_map = {}
                             for _, r in df_txs.iterrows():
-                                lbl = f"#{int(r['id'])} {str(r['description'])[:40]} {fmt_brl(r['amount'])}"
+                                pac = ""
+                                if "paciente" in r and pd.notna(r["paciente"]) and str(r["paciente"]).strip():
+                                    pac = str(r["paciente"]).strip()
+                                desc = str(r["description"] or "").strip()
+                                # Mostra o paciente (do agendamento) quando houver; senao a descricao.
+                                # Se a descricao ja tiver o nome, mantem tudo sem cortar cedo demais.
+                                if pac and pac.lower() not in desc.lower():
+                                    nome = f"{pac} — {desc}"
+                                else:
+                                    nome = desc or pac or "(sem descricao)"
+                                dt = str(r["date_caixa"])[:10]
+                                lbl = f"#{int(r['id'])} {dt} · {nome[:70]} · {fmt_brl(r['amount'])}"
                                 tx_map[lbl] = (int(r["id"]), float(r["amount"] or 0))
 
                             ags_sel = st.multiselect("Agendamentos vinculados", list(ag_map.keys()), key=f"ag_ms_{ext_id}")
