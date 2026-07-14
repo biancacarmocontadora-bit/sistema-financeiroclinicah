@@ -200,6 +200,9 @@ def init_db():
                 tipo TEXT NOT NULL, conciliado INTEGER DEFAULT 0,
                 transaction_id INTEGER, agendamento_id INTEGER,
                 importado_em TIMESTAMP DEFAULT NOW())""",
+            """CREATE TABLE IF NOT EXISTS conciliacao_links (
+                id SERIAL PRIMARY KEY, company_id INTEGER NOT NULL,
+                extrato_id INTEGER NOT NULL, ref_tipo TEXT NOT NULL, ref_id INTEGER NOT NULL)""",
         ]:
             cur.execute(stmt)
         # Migra colunas de cartao em bancos existentes (Postgres)
@@ -308,6 +311,10 @@ def init_db():
                 importado_em TEXT DEFAULT (datetime('now','localtime')),
                 FOREIGN KEY(company_id) REFERENCES companies(id),
                 FOREIGN KEY(bank_id) REFERENCES banks(id));
+            CREATE TABLE IF NOT EXISTS conciliacao_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL, extrato_id INTEGER NOT NULL,
+                ref_tipo TEXT NOT NULL, ref_id INTEGER NOT NULL);
         """)
         # Migra colunas de cartao em bancos existentes
         for col, definition in [("cartao_bandeira", "TEXT"), ("cartao_parcelas", "INTEGER DEFAULT 1")]:
@@ -1477,6 +1484,9 @@ elif page == "Conciliacao Bancaria":
                            "lancamentos financeiros NAO sao afetados.")
                 conf_del_all = st.checkbox("Confirmo que quero excluir todos deste periodo", key="conf_del_all_ext")
                 if st.button("Excluir tudo agora", type="primary", disabled=not conf_del_all, key="btn_del_all_ext"):
+                    run("""DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id IN
+                           (SELECT id FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?)""",
+                        (cid, cid, bank_id_conc, dt_conc_ini.strftime("%Y-%m-%d"), dt_conc_fim.strftime("%Y-%m-%d")))
                     run("DELETE FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?",
                         (cid, bank_id_conc, dt_conc_ini.strftime("%Y-%m-%d"), dt_conc_fim.strftime("%Y-%m-%d")))
                     st.success(f"{len(df_ext)} lancamento(s) do extrato excluido(s).")
@@ -1505,52 +1515,51 @@ elif page == "Conciliacao Bancaria":
                             st.write(f"**Valor:** {fmt_brl(ext_row['valor'])} ({ext_row['tipo']})")
 
                         with ec2:
-                            # Sugestoes automaticas por valor e data proxima
-                            sugestoes_ag = []
-                            if not df_ags.empty:
-                                for _, ag in df_ags.iterrows():
-                                    if abs(float(ag["valor"] or 0) - float(ext_row["valor"])) < 0.02:
-                                        ag_date = str(ag["data_hora"])[:10]
-                                        sugestoes_ag.append(f"#{int(ag['id'])} {ag['paciente']} {ag_date} {fmt_brl(ag['valor'])}")
+                            st.caption("Selecione UM ou VARIOS agendamentos e/ou lancamentos. "
+                                       "A soma deles deve bater com o valor do extrato.")
+                            # Monta as opcoes (rotulo -> (id, valor))
+                            ag_map = {}
+                            for _, r in df_ags.iterrows():
+                                lbl = f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) {fmt_brl(r['valor'])}"
+                                ag_map[lbl] = (int(r["id"]), float(r["valor"] or 0))
+                            tx_map = {}
+                            for _, r in df_txs.iterrows():
+                                lbl = f"#{int(r['id'])} {str(r['description'])[:40]} {fmt_brl(r['amount'])}"
+                                tx_map[lbl] = (int(r["id"]), float(r["amount"] or 0))
 
-                            sugestoes_tx = []
-                            if not df_txs.empty:
-                                for _, tx in df_txs.iterrows():
-                                    if abs(float(tx["amount"] or 0) - float(ext_row["valor"])) < 0.02:
-                                        sugestoes_tx.append(f"#{int(tx['id'])} {str(tx['description'])[:40]} {fmt_brl(tx['amount'])}")
+                            ags_sel = st.multiselect("Agendamentos vinculados", list(ag_map.keys()), key=f"ag_ms_{ext_id}")
+                            txs_sel = st.multiselect("Lancamentos financeiros vinculados", list(tx_map.keys()), key=f"tx_ms_{ext_id}")
 
-                            vincular_tipo = st.radio("Vincular a:", ["Agendamento", "Lancamento Financeiro", "Nao vincular"],
-                                                     horizontal=True, key=f"vt_{ext_id}")
-
-                            if vincular_tipo == "Agendamento" and not df_ags.empty:
-                                ag_opts = ["-- selecionar --"] + [f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) {fmt_brl(r['valor'])}"
-                                                                    for _, r in df_ags.iterrows()]
-                                if sugestoes_ag:
-                                    st.caption(f"Sugestoes por valor: {', '.join(sugestoes_ag[:3])}")
-                                ag_sel = st.selectbox("Agendamento", ag_opts, key=f"ag_sel_{ext_id}")
-                                ag_id_v = None if ag_sel == "-- selecionar --" else int(ag_sel.split("#")[1].split(" ")[0])
-                            elif vincular_tipo == "Lancamento Financeiro" and not df_txs.empty:
-                                tx_opts = ["-- selecionar --"] + [f"#{int(r['id'])} {str(r['description'])[:40]} {fmt_brl(r['amount'])}"
-                                                                    for _, r in df_txs.iterrows()]
-                                if sugestoes_tx:
-                                    st.caption(f"Sugestoes por valor: {', '.join(sugestoes_tx[:3])}")
-                                tx_sel = st.selectbox("Lancamento", tx_opts, key=f"tx_sel_{ext_id}")
-                                tx_id_v = None if tx_sel == "-- selecionar --" else int(tx_sel.split("#")[1].split(" ")[0])
-                            else:
-                                ag_id_v = None
-                                tx_id_v = None
+                            soma_sel = sum(ag_map[l][1] for l in ags_sel) + sum(tx_map[l][1] for l in txs_sel)
+                            dif = round(float(ext_row["valor"]) - soma_sel, 2)
+                            st.write(f"**Selecionado:** {fmt_brl(soma_sel)}  |  **Extrato:** {fmt_brl(ext_row['valor'])}  "
+                                     f"|  **Diferenca:** {fmt_brl(dif)}")
+                            if (ags_sel or txs_sel):
+                                if abs(dif) < 0.01:
+                                    st.success("Os valores batem certinho ✅")
+                                else:
+                                    st.warning("Atencao: a soma selecionada nao bate com o extrato.")
 
                         col_btn1, col_btn2 = st.columns(2)
                         with col_btn1:
                             if st.button("✅ Marcar Conciliado", key=f"conc_{ext_id}"):
-                                ag_v  = ag_id_v  if vincular_tipo == "Agendamento" else None
-                                tx_v  = tx_id_v  if vincular_tipo == "Lancamento Financeiro" else None
+                                run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
+                                for l in ags_sel:
+                                    run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
+                                        (cid, ext_id, "agendamento", ag_map[l][0]))
+                                for l in txs_sel:
+                                    run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
+                                        (cid, ext_id, "transaction", tx_map[l][0]))
+                                # mantem as colunas simples (primeiro de cada) para compatibilidade
+                                ag_first = ag_map[ags_sel[0]][0] if ags_sel else None
+                                tx_first = tx_map[txs_sel[0]][0] if txs_sel else None
                                 run("UPDATE extrato_banco SET conciliado=1, agendamento_id=?, transaction_id=? WHERE id=?",
-                                    (ag_v, tx_v, ext_id))
-                                st.success("Conciliado!")
+                                    (ag_first, tx_first, ext_id))
+                                st.success(f"Conciliado! {len(ags_sel) + len(txs_sel)} item(ns) vinculado(s).")
                                 st.rerun()
                         with col_btn2:
                             if st.button("🗑️ Excluir lancamento", key=f"del_ext_{ext_id}"):
+                                run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
                                 run("DELETE FROM extrato_banco WHERE id=?", (ext_id,))
                                 st.rerun()
 
@@ -1589,6 +1598,9 @@ elif page == "Conciliacao Bancaria":
             with st.expander("⚠️ Limpar extrato importado"):
                 st.warning("Isso remove TODOS os lancamentos do extrato do periodo selecionado (conciliados e pendentes).")
                 if st.button("Confirmar Limpeza", key="limpar_hist"):
+                    run("""DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id IN
+                           (SELECT id FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?)""",
+                        (cid, cid, bank_id_hist, dt_hist_ini.strftime("%Y-%m-%d"), dt_hist_fim.strftime("%Y-%m-%d")))
                     run("DELETE FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ?",
                         (cid, bank_id_hist, dt_hist_ini.strftime("%Y-%m-%d"), dt_hist_fim.strftime("%Y-%m-%d")))
                     st.success("Extrato limpo.")
