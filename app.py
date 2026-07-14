@@ -1500,9 +1500,24 @@ elif page == "Conciliacao Bancaria":
                 st.success("Todos os lancamentos ja foram conciliados!")
             else:
                 # Carrega agendamentos realizados e transacoes para sugerir vinculo
-                df_ags = q("SELECT id, paciente, data_hora, valor, forma_pagamento FROM agendamentos WHERE company_id=? AND status='realizado'", (cid,))
+                df_ags = q("""SELECT id, paciente, data_hora, valor, forma_pagamento, cartao_parcelas
+                              FROM agendamentos WHERE company_id=? AND status='realizado'""", (cid,))
                 df_txs = q("SELECT id, description, amount, date_caixa, payment_method FROM transactions WHERE company_id=? AND bank_id=?",
                            (cid, bank_id_conc))
+
+                # Calcula o valor liquido do agendamento (desconta a taxa do cartao),
+                # que e o valor que realmente cai no banco.
+                cf_conc = get_card_fees(cid)
+                def liquido_ag(forma, valor, parcelas):
+                    valor = float(valor or 0)
+                    f = str(forma or "")
+                    if "+" in f:  # pagamento misto: mantem o bruto (concilie pelos lancamentos)
+                        return valor
+                    fee = find_card_fee(cf_conc, f, int(parcelas or 1))
+                    if fee.empty:
+                        return valor
+                    pct = float(fee.iloc[0]["fee_percent"])
+                    return round(valor * (1 - pct / 100), 2)
 
                 for _, ext_row in df_pend.iterrows():
                     ext_id = int(ext_row["id"])
@@ -1517,11 +1532,17 @@ elif page == "Conciliacao Bancaria":
                         with ec2:
                             st.caption("Selecione UM ou VARIOS agendamentos e/ou lancamentos. "
                                        "A soma deles deve bater com o valor do extrato.")
-                            # Monta as opcoes (rotulo -> (id, valor))
+                            # Monta as opcoes (rotulo -> (id, valor liquido))
                             ag_map = {}
                             for _, r in df_ags.iterrows():
-                                lbl = f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) {fmt_brl(r['valor'])}"
-                                ag_map[lbl] = (int(r["id"]), float(r["valor"] or 0))
+                                bruto = float(r["valor"] or 0)
+                                liq = liquido_ag(r["forma_pagamento"], bruto, r["cartao_parcelas"])
+                                if abs(liq - bruto) >= 0.01:
+                                    lbl = (f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) "
+                                           f"liq {fmt_brl(liq)} · bruto {fmt_brl(bruto)}")
+                                else:
+                                    lbl = f"#{int(r['id'])} {r['paciente']} ({str(r['data_hora'])[:10]}) {fmt_brl(liq)}"
+                                ag_map[lbl] = (int(r["id"]), liq)
                             tx_map = {}
                             for _, r in df_txs.iterrows():
                                 lbl = f"#{int(r['id'])} {str(r['description'])[:40]} {fmt_brl(r['amount'])}"
