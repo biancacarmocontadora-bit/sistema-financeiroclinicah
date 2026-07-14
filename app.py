@@ -1240,7 +1240,7 @@ elif page == "Extrato":
     with col6:
         data_filt = st.selectbox("Filtrar por", ["Competencia", "Caixa"])
 
-    conc_filt = st.selectbox("Conciliacao", ["Todos", "Conciliados", "Pendentes"], key="ext_conc_filt")
+    conc_filt = st.selectbox("Conciliacao", ["Conciliados", "Todos", "Pendentes"], key="ext_conc_filt")
 
     campo_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
     ordem_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
