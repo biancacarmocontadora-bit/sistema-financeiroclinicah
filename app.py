@@ -1228,7 +1228,12 @@ elif page == "Extrato":
                t.payment_method as "Forma", t.status as "Status",
                b.name as "Banco", c.name as "Categoria",
                COALESCE(p.name, '-') as "Profissional",
-               t.installment_num as "Parc", t.installment_total as "Total_Parc"
+               t.installment_num as "Parc", t.installment_total as "Total_Parc",
+               (CASE WHEN EXISTS (SELECT 1 FROM conciliacao_links cl
+                                  WHERE cl.company_id=t.company_id AND cl.ref_tipo='transaction' AND cl.ref_id=t.id)
+                       OR EXISTS (SELECT 1 FROM extrato_banco eb
+                                  WHERE eb.transaction_id=t.id AND eb.conciliado=1)
+                     THEN 1 ELSE 0 END) as "ConcFlag"
         FROM transactions t
         LEFT JOIN banks b ON t.bank_id=b.id
         LEFT JOIN categories c ON t.category_id=c.id
@@ -1269,7 +1274,9 @@ elif page == "Extrato":
         df_show["Tipo"] = df_show["Tipo"].map({"receita": "Receita", "despesa": "Despesa"})
         df_show["Parcela"] = df_show.apply(
             lambda r: "{}/{}".format(int(r["Parc"]), int(r["Total_Parc"])) if pd.notna(r["Parc"]) else "-", axis=1)
-        st.dataframe(df_show[["id","Competencia","Caixa","Descricao","Tipo","Valor","Forma","Status","Banco","Categoria","Profissional","Parcela"]],
+        df_show["Conciliado"] = df_show["ConcFlag"].apply(
+            lambda x: "✅ Conciliado" if int(x or 0) == 1 else "⏳ Pendente")
+        st.dataframe(df_show[["id","Competencia","Caixa","Descricao","Tipo","Valor","Forma","Status","Conciliado","Banco","Categoria","Profissional","Parcela"]],
                      use_container_width=True, hide_index=True)
 
         st.markdown("---")
