@@ -1285,6 +1285,35 @@ elif page == "Extrato":
                 else:
                     st.info("Nenhum vinculo automatico encontrado (o nome do paciente nao aparece nas descricoes).")
 
+    with st.expander("🔎 Investigar um lancamento/agendamento (por paciente ou valor)"):
+        termo = st.text_input("Digite parte do nome do paciente ou o valor (ex.: ARTUR ou 3554)", key="invest_termo")
+        if termo.strip():
+            t = termo.strip()
+            like_desc = f"%{t.upper()}%"
+            like_val = f"%{t.replace(',', '.')}%"
+            txr = q("""SELECT id, description AS descricao, amount AS valor, date_competencia AS competencia,
+                              date_caixa AS caixa, payment_method AS forma, bank_id, agendamento_id
+                       FROM transactions
+                       WHERE company_id=? AND (UPPER(description) LIKE ? OR CAST(amount AS TEXT) LIKE ?)
+                       ORDER BY date_caixa DESC""", (cid, like_desc, like_val))
+            st.write(f"**Lancamentos (financeiro) encontrados nesta empresa: {len(txr)}**")
+            if not txr.empty:
+                st.dataframe(txr, use_container_width=True, hide_index=True)
+            agr = q("""SELECT id, paciente, data_hora, valor, status, forma_pagamento, cartao_parcelas
+                       FROM agendamentos
+                       WHERE company_id=? AND (UPPER(paciente) LIKE ? OR CAST(valor AS TEXT) LIKE ?)
+                       ORDER BY data_hora DESC""", (cid, like_desc, like_val))
+            st.write(f"**Agendamentos encontrados nesta empresa: {len(agr)}**")
+            if not agr.empty:
+                st.dataframe(agr, use_container_width=True, hide_index=True)
+            # Checa se existe em OUTRA empresa (empresa errada selecionada)
+            outras = q("""SELECT company_id, COUNT(*) AS qtd FROM transactions
+                          WHERE (UPPER(description) LIKE ? OR CAST(amount AS TEXT) LIKE ?) AND company_id<>?
+                          GROUP BY company_id""", (like_desc, like_val, cid))
+            if not outras.empty:
+                st.warning("Existem lancamentos com esse termo em OUTRA(S) empresa(s): "
+                           + ", ".join(f"empresa {int(r['company_id'])} ({int(r['qtd'])})" for _, r in outras.iterrows()))
+
     today = date.today()
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
