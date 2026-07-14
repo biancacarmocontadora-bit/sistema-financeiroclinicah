@@ -1314,6 +1314,74 @@ elif page == "Extrato":
                 st.warning("Existem lancamentos com esse termo em OUTRA(S) empresa(s): "
                            + ", ".join(f"empresa {int(r['company_id'])} ({int(r['qtd'])})" for _, r in outras.iterrows()))
 
+    with st.expander("🧾 Gerar lancamentos de agendamentos realizados SEM lancamento"):
+        st.caption("Para atendimentos marcados como realizados cujo pagamento nunca foi lancado no "
+                   "financeiro (por isso nao aparecem no extrato). Gera uma receita com o valor do "
+                   "agendamento. Revise a lista antes de aplicar; nao cria duplicado.")
+        if st.checkbox("Procurar agendamentos sem lancamento", key="chk_gen_ag"):
+            banks_g = get_banks(cid)
+            if banks_g.empty:
+                st.warning("Cadastre um banco antes de gerar lancamentos.")
+            else:
+                bank_opts_g = {r["name"]: int(r["id"]) for _, r in banks_g.iterrows()}
+                banco_g = st.selectbox("Banco onde entrou o dinheiro", list(bank_opts_g.keys()), key="gen_bank")
+
+                ags_pend = q("""SELECT a.id, a.paciente, a.data_hora, a.valor, a.forma_pagamento, a.medico,
+                                       a.tipo_consulta
+                                FROM agendamentos a
+                                WHERE a.company_id=? AND a.status='realizado' AND a.valor>0
+                                  AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.agendamento_id=a.id)
+                                ORDER BY a.data_hora""", (cid,))
+                tx_all = q("SELECT description, amount FROM transactions WHERE company_id=?", (cid,))
+
+                import unicodedata
+                def _normg(s):
+                    s = "".join(ch for ch in unicodedata.normalize("NFD", str(s or ""))
+                                if unicodedata.category(ch) != "Mn")
+                    return " ".join(s.upper().split())
+                tx_norm = [(_normg(r["description"]), float(r["amount"] or 0)) for _, r in tx_all.iterrows()]
+
+                def ja_tem(paciente, valor):
+                    pn = _normg(paciente)
+                    if not pn:
+                        return False
+                    for desc, amt in tx_norm:
+                        if pn in desc and abs(amt - float(valor or 0)) < 0.02:
+                            return True
+                    return False
+
+                propostas_g = []
+                for _, a in ags_pend.iterrows():
+                    if ja_tem(a["paciente"], a["valor"]):
+                        continue  # ja existe lancamento equivalente (nao vinculado) -> evita duplicar
+                    propostas_g.append({"agendamento": int(a["id"]), "paciente": str(a["paciente"]),
+                                        "data": str(a["data_hora"])[:10], "valor": float(a["valor"] or 0),
+                                        "forma": str(a["forma_pagamento"] or "(vazia)"),
+                                        "medico": str(a["medico"] or "")})
+
+                st.write(f"Agendamentos realizados sem lancamento: **{len(propostas_g)}**")
+                if propostas_g:
+                    st.dataframe(pd.DataFrame(propostas_g)[["agendamento", "paciente", "data", "valor", "forma", "medico"]],
+                                 use_container_width=True, hide_index=True)
+                    st.caption("Sera criada uma RECEITA com o valor cheio do agendamento, na data do "
+                               "atendimento, vinculada ao paciente/medico. Ajuste depois se algum for cartao.")
+                    if st.button("Gerar lancamentos", key="btn_gen_ag", type="primary"):
+                        bid_g = bank_opts_g[banco_g]
+                        for p in propostas_g:
+                            pid_g = get_or_create_professional_id(cid, p["medico"])
+                            forma_g = p["forma"] if p["forma"] != "(vazia)" else "pix"
+                            run_insert_id("""INSERT INTO transactions
+                                (company_id, bank_id, professional_id, type, description, amount,
+                                 date_competencia, date_caixa, payment_method, status, agendamento_id)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                (cid, bid_g, pid_g, "receita", f"Consulta - {p['paciente']}",
+                                 p["valor"], p["data"], p["data"], forma_g, "pago", p["agendamento"]))
+                        st.cache_data.clear()
+                        st.success(f"{len(propostas_g)} lancamento(s) gerado(s)! Agora aparecem no extrato.")
+                        st.rerun()
+                else:
+                    st.success("Nenhum agendamento realizado sem lancamento (ou ja existe lancamento equivalente).")
+
     today = date.today()
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
