@@ -100,13 +100,26 @@ def _run_pooled(work):
     """Executa work(conn) reaproveitando a conexao. SQLite abre/fecha na hora;
     Postgres usa a conexao persistente, com reconexao automatica se cair."""
     if not USE_POSTGRES:
-        conn = _sqlite_connect()
-        try:
-            result = work(conn)
-            conn.commit()
-            return result
-        finally:
-            conn.close()
+        # Tenta algumas vezes se o banco estiver travado por outro usuario naquele
+        # instante (alem do WAL + busy_timeout ja configurados). So depois de
+        # esgotar as tentativas o erro sobe para a tela.
+        import time as _time
+        ultimo_erro = None
+        for tentativa in range(5):
+            conn = _sqlite_connect()
+            try:
+                result = work(conn)
+                conn.commit()
+                return result
+            except sqlite3.OperationalError as e:
+                ultimo_erro = e
+                if "locked" in str(e).lower() or "busy" in str(e).lower():
+                    _time.sleep(0.4 * (tentativa + 1))
+                    continue
+                raise
+            finally:
+                conn.close()
+        raise ultimo_erro
 
     holder = _pg_holder()
     with holder["lock"]:
@@ -2997,18 +3010,26 @@ if page == "Agendamentos":
                                 formas_salvas.append(f_sel)
 
                             # Um único round-trip ao banco para todos os lançamentos
-                            if rows_tx:
-                                run_many("""INSERT INTO transactions
-                                    (company_id, bank_id, professional_id, type, description, amount,
-                                     date_competencia, date_caixa, payment_method, status,
-                                     installment_group, installment_num, installment_total, notes, agendamento_id)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
-
-                            formas_str = " + ".join(formas_salvas)
-                            run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
-                                (formas_str, total_pago, ag_id))
-                            st.success(f"Pagamento de {fmt_brl(total_pago)} registrado! ({formas_str})")
-                            st.rerun()
+                            sucesso_pag = False
+                            try:
+                                if rows_tx:
+                                    run_many("""INSERT INTO transactions
+                                        (company_id, bank_id, professional_id, type, description, amount,
+                                         date_competencia, date_caixa, payment_method, status,
+                                         installment_group, installment_num, installment_total, notes, agendamento_id)
+                                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows_tx)
+                                formas_str = " + ".join(formas_salvas)
+                                run("UPDATE agendamentos SET status='realizado', forma_pagamento=?, valor=? WHERE id=?",
+                                    (formas_str, total_pago, ag_id))
+                                st.cache_data.clear()
+                                sucesso_pag = True
+                            except Exception as e:
+                                st.error("Nao foi possivel salvar o pagamento agora (o sistema pode estar sendo "
+                                         "usado por outra pessoa neste instante). Aguarde alguns segundos e "
+                                         f"tente de novo. Detalhe: {e}")
+                            if sucesso_pag:
+                                st.session_state["ag_salvo_msg"] = f"Pagamento de {fmt_brl(total_pago)} registrado! ({formas_str})"
+                                st.rerun()
 
                 with st.expander("✏️ Editar / Excluir"):
                     try:
