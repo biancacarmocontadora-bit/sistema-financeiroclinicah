@@ -1730,11 +1730,14 @@ elif page == "Conciliacao Bancaria":
                 # Carrega agendamentos realizados e transacoes para sugerir vinculo
                 df_ags = q("""SELECT id, paciente, data_hora, valor, forma_pagamento, cartao_parcelas
                               FROM agendamentos WHERE company_id=? AND status='realizado'""", (cid,))
+                # Inclui tambem lancamentos SEM banco definido (ex.: pagamento em cartao
+                # lancado direto no cadastro do agendamento) para que apareçam aqui e
+                # possam ser conciliados.
                 df_txs = q("""SELECT t.id, t.description, t.amount, t.date_caixa, t.payment_method,
                                      a.paciente AS paciente
                               FROM transactions t
                               LEFT JOIN agendamentos a ON t.agendamento_id = a.id
-                              WHERE t.company_id=? AND t.bank_id=?""", (cid, bank_id_conc))
+                              WHERE t.company_id=? AND (t.bank_id=? OR t.bank_id IS NULL)""", (cid, bank_id_conc))
 
                 # Calcula o valor liquido do agendamento (desconta a taxa do cartao),
                 # que e o valor que realmente cai no banco.
