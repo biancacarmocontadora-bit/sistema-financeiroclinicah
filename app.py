@@ -30,6 +30,22 @@ if not USE_POSTGRES:
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "financeiro.db")
 
+def _sqlite_connect():
+    """Abre o SQLite ja preparado para uso simultaneo (varios computadores/abas
+    na rede da clinica ao mesmo tempo). Sem isso, um clique de gravacao (ex.:
+    'Gerar lancamento e conciliar') dava 'database is locked' quando outra pessoa
+    estava usando o sistema, e a acao nao era salva.
+      - WAL: leitores nao bloqueiam o gravador (e vice-versa);
+      - busy_timeout: espera ate 30s por um lock em vez de falhar na hora."""
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    except Exception:
+        pass
+    return conn
+
 def get_conn():
     if USE_POSTGRES:
         import urllib.parse
@@ -47,7 +63,7 @@ def get_conn():
         except Exception as e:
             st.error(f"DB host={url.hostname} port={url.port} user={url.username} | {e}")
             raise
-    return sqlite3.connect(DB_PATH)
+    return _sqlite_connect()
 
 import threading
 
@@ -84,7 +100,7 @@ def _run_pooled(work):
     """Executa work(conn) reaproveitando a conexao. SQLite abre/fecha na hora;
     Postgres usa a conexao persistente, com reconexao automatica se cair."""
     if not USE_POSTGRES:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _sqlite_connect()
         try:
             result = work(conn)
             conn.commit()
@@ -1662,6 +1678,8 @@ elif page == "Conciliacao Bancaria":
     # ── TAB 2: CONCILIAR ──────────────────────────────────────────────────────
     with tab_conciliar:
         st.subheader("Conciliar Lancamentos do Extrato")
+        if st.session_state.get("conc_msg"):
+            st.success(st.session_state.pop("conc_msg"))
 
         cc1, cc2, cc3 = st.columns(3)
         with cc1:
@@ -1822,38 +1840,49 @@ elif page == "Conciliacao Bancaria":
                                 st.caption(f"Data de caixa (caiu no banco): {ext_row['data']}")
 
                             if st.button("Gerar lancamento e conciliar", key=f"gbtn_{ext_id}", type="primary"):
-                                new_id = run_insert_id("""INSERT INTO transactions
-                                    (company_id, bank_id, professional_id, category_id, type, description, amount,
-                                     date_competencia, date_caixa, payment_method, status)
-                                    VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                                    (cid, bank_id_conc, prof_opts_g[prof_novo], cat_opts_g[cat_novo], tipo_novo,
-                                     desc_novo, float(valor_novo), comp_novo.strftime("%Y-%m-%d"), ext_row["data"],
-                                     "conciliacao", "pago"))
-                                run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
-                                run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
-                                    (cid, ext_id, "transaction", int(new_id)))
-                                run("UPDATE extrato_banco SET conciliado=1, transaction_id=? WHERE id=?", (int(new_id), ext_id))
-                                st.cache_data.clear()
-                                st.success(f"Lancamento #{new_id} criado e conciliado!")
-                                st.rerun()
+                                try:
+                                    new_id = run_insert_id("""INSERT INTO transactions
+                                        (company_id, bank_id, professional_id, category_id, type, description, amount,
+                                         date_competencia, date_caixa, payment_method, status)
+                                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                                        (cid, bank_id_conc, prof_opts_g[prof_novo], cat_opts_g[cat_novo], tipo_novo,
+                                         desc_novo, float(valor_novo), comp_novo.strftime("%Y-%m-%d"), ext_row["data"],
+                                         "conciliacao", "pago"))
+                                    run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
+                                    run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
+                                        (cid, ext_id, "transaction", int(new_id)))
+                                    run("UPDATE extrato_banco SET conciliado=1, transaction_id=? WHERE id=?", (int(new_id), ext_id))
+                                    st.cache_data.clear()
+                                    st.session_state["conc_msg"] = f"Lancamento #{new_id} criado e conciliado!"
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error("Nao foi possivel salvar agora (o sistema pode estar sendo usado por "
+                                             "outra pessoa neste instante). Aguarde alguns segundos e clique de novo. "
+                                             f"Detalhe: {e}")
 
                         col_btn1, col_btn2 = st.columns(2)
                         with col_btn1:
                             if st.button("✅ Marcar Conciliado", key=f"conc_{ext_id}"):
-                                run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
-                                for l in ags_sel:
-                                    run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
-                                        (cid, ext_id, "agendamento", ag_map[l][0]))
-                                for l in txs_sel:
-                                    run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
-                                        (cid, ext_id, "transaction", tx_map[l][0]))
-                                # mantem as colunas simples (primeiro de cada) para compatibilidade
-                                ag_first = ag_map[ags_sel[0]][0] if ags_sel else None
-                                tx_first = tx_map[txs_sel[0]][0] if txs_sel else None
-                                run("UPDATE extrato_banco SET conciliado=1, agendamento_id=?, transaction_id=? WHERE id=?",
-                                    (ag_first, tx_first, ext_id))
-                                st.success(f"Conciliado! {len(ags_sel) + len(txs_sel)} item(ns) vinculado(s).")
-                                st.rerun()
+                                try:
+                                    run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))
+                                    for l in ags_sel:
+                                        run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
+                                            (cid, ext_id, "agendamento", ag_map[l][0]))
+                                    for l in txs_sel:
+                                        run("INSERT INTO conciliacao_links (company_id, extrato_id, ref_tipo, ref_id) VALUES (?,?,?,?)",
+                                            (cid, ext_id, "transaction", tx_map[l][0]))
+                                    # mantem as colunas simples (primeiro de cada) para compatibilidade
+                                    ag_first = ag_map[ags_sel[0]][0] if ags_sel else None
+                                    tx_first = tx_map[txs_sel[0]][0] if txs_sel else None
+                                    run("UPDATE extrato_banco SET conciliado=1, agendamento_id=?, transaction_id=? WHERE id=?",
+                                        (ag_first, tx_first, ext_id))
+                                    st.cache_data.clear()
+                                    st.session_state["conc_msg"] = f"Conciliado! {len(ags_sel) + len(txs_sel)} item(ns) vinculado(s)."
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error("Nao foi possivel salvar agora (o sistema pode estar sendo usado por "
+                                             "outra pessoa neste instante). Aguarde alguns segundos e clique de novo. "
+                                             f"Detalhe: {e}")
                         with col_btn2:
                             if st.button("🗑️ Excluir lancamento", key=f"del_ext_{ext_id}"):
                                 run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, ext_id))

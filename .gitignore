@@ -6,6 +6,8 @@ __pycache__/
 .Python
 # Banco de dados local (nao subir)
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 # Ambientes virtuais
