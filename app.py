@@ -2756,14 +2756,17 @@ if page == "Agendamentos":
         with col_f7:
             f_tipo = st.selectbox("Tipo de Atendimento", tipo_opts_f)
 
-        sql_ag = "SELECT * FROM agendamentos WHERE company_id=? AND substr(data_hora,1,10) BETWEEN ? AND ?"
-        params_ag = [cid, f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
+        busca_nome = f_busca.strip()
+        sql_ag = "SELECT * FROM agendamentos WHERE company_id=?"
+        params_ag = [cid]
+        # Ao buscar por nome, procura em QUALQUER data (ignora o periodo). Assim o
+        # agendamento aparece mesmo que a data esteja fora da janela De/Ate padrao.
+        if not busca_nome:
+            sql_ag += " AND substr(data_hora,1,10) BETWEEN ? AND ?"
+            params_ag += [f_data_ini.strftime("%Y-%m-%d"), f_data_fim.strftime("%Y-%m-%d")]
         if f_status != "Todos":
             sql_ag += " AND status=?"
             params_ag.append(f_status)
-        if f_busca.strip():
-            sql_ag += " AND paciente LIKE ?"
-            params_ag.append(f"%{f_busca}%")
         if f_convenio != "Todos":
             sql_ag += " AND convenio=?"
             params_ag.append(f_convenio)
@@ -2776,6 +2779,20 @@ if page == "Agendamentos":
         sql_ag += " ORDER BY data_hora ASC"
 
         df_ag = q(sql_ag, tuple(params_ag))
+
+        # Filtro de nome robusto a maiusculas/acentos (o LIKE do SQLite nao casa
+        # acentos com caixa diferente, ex.: "joao" x "JOÃO").
+        if busca_nome and not df_ag.empty:
+            import unicodedata
+            def _norm_nome(s):
+                s = "".join(ch for ch in unicodedata.normalize("NFD", str(s or ""))
+                            if unicodedata.category(ch) != "Mn")
+                return s.upper().strip()
+            alvo = _norm_nome(busca_nome)
+            df_ag = df_ag[df_ag["paciente"].apply(lambda p: alvo in _norm_nome(p))]
+            if busca_nome:
+                st.caption(f"Buscando por nome em TODO o historico (ignorando o periodo). "
+                           f"{len(df_ag)} resultado(s).")
 
         if df_ag.empty:
             st.info("Nenhum agendamento encontrado para o periodo.")
