@@ -419,9 +419,25 @@ def ensure_conciliacao_links():
     except Exception:
         pass
 
+def ensure_extrato_idofx():
+    """Adiciona a coluna id_ofx ao extrato (identificador unico da transacao no OFX).
+    Sem ela, reimportar o extrato podia recriar lancamentos ja conciliados como
+    pendentes (parecia que a conciliacao 'sumia'). Idempotente e barata."""
+    try:
+        if USE_POSTGRES:
+            run("ALTER TABLE extrato_banco ADD COLUMN IF NOT EXISTS id_ofx TEXT")
+        else:
+            cols = q("PRAGMA table_info(extrato_banco)")
+            nomes = list(cols["name"]) if not cols.empty else []
+            if "id_ofx" not in nomes:
+                run("ALTER TABLE extrato_banco ADD COLUMN id_ofx TEXT")
+    except Exception:
+        pass
+
 # Garante a tabela de vinculos uma vez por sessao (cobre Extrato e Conciliacao)
 if not st.session_state.get("_conc_links_ok"):
     ensure_conciliacao_links()
+    ensure_extrato_idofx()
     st.session_state["_conc_links_ok"] = True
 
 st.markdown("""
@@ -573,9 +589,13 @@ def parse_ofx_extrato(arquivo):
             descartados.append(f"valor invalido: '{campo(bloco, 'TRNAMT') or 'vazio'}' em {data_fmt}")
             continue
         desc = campo(bloco, "MEMO") or campo(bloco, "NAME") or "Lancamento"
+        # FITID: identificador unico que o banco atribui a cada transacao no OFX.
+        # E usado para nao reimportar (nem "sumir") lancamentos ja conciliados,
+        # mesmo quando o banco muda levemente o texto da descricao entre extratos.
+        fitid = campo(bloco, "FITID")
         linhas.append({"Data": data_fmt, "Descricao": desc,
-                       "Valor": f"{valor:.2f}".replace(".", ",")})
-    df_ofx = pd.DataFrame(linhas, columns=["Data", "Descricao", "Valor"])
+                       "Valor": f"{valor:.2f}".replace(".", ","), "IdOfx": fitid})
+    df_ofx = pd.DataFrame(linhas, columns=["Data", "Descricao", "Valor", "IdOfx"])
     # Diagnostico: quantas transacoes havia no arquivo e o que nao pode ser lido
     df_ofx.attrs["total_no_arquivo"] = len(blocos)
     df_ofx.attrs["descartados"] = descartados
@@ -1718,8 +1738,49 @@ elif page == "Conciliacao Bancaria":
                                 rows_skip += 1
                                 continue
 
-                            # Duplicata por CONTAGEM: so pula se o banco ja tiver
-                            # tantos lancamentos identicos quanto os ja vistos aqui.
+                            # Identificador unico da transacao no OFX (quando o arquivo tem).
+                            fitid = ""
+                            if "IdOfx" in row_r.index:
+                                fitid = str(row_r["IdOfx"]).strip()
+                                if fitid.lower() in ("nan", "none"):
+                                    fitid = ""
+
+                            if fitid:
+                                # DEDUP POR FITID: a prova de mudancas de texto do banco. Se
+                                # esta transacao ja existe neste banco, nao reimporta (esteja
+                                # conciliada ou nao) -> a conciliacao nunca mais "some".
+                                ja = q("""SELECT COUNT(*) AS c FROM extrato_banco
+                                          WHERE company_id=? AND bank_id=? AND id_ofx=?""",
+                                       (cid, bank_id_imp, fitid))
+                                if not ja.empty and int(ja.iloc[0]["c"]) > 0:
+                                    rows_dup += 1
+                                    continue
+                                # Transicao: casa com uma linha antiga (importada antes deste
+                                # campo) de mesma data/descricao/valor que ainda nao tem FITID.
+                                # Grava o FITID nela em vez de criar copia, preservando a
+                                # conciliacao ja feita.
+                                alvo = q("""SELECT id FROM extrato_banco
+                                            WHERE company_id=? AND bank_id=? AND data=? AND descricao=?
+                                              AND ABS(valor - ?) < 0.005
+                                              AND (id_ofx IS NULL OR id_ofx='')
+                                            ORDER BY id LIMIT 1""",
+                                         (cid, bank_id_imp, dt_imp, raw_desc, valor_imp))
+                                if not alvo.empty:
+                                    run("UPDATE extrato_banco SET id_ofx=? WHERE id=?",
+                                        (fitid, int(alvo.iloc[0]["id"])))
+                                    rows_dup += 1
+                                    continue
+                                run("""INSERT INTO extrato_banco
+                                       (company_id, bank_id, data, descricao, valor, tipo, id_ofx)
+                                       VALUES (?,?,?,?,?,?,?)""",
+                                    (cid, bank_id_imp, dt_imp, raw_desc, valor_imp, tipo_imp, fitid))
+                                rows_ok += 1
+                                continue
+
+                            # Sem FITID (CSV/Excel, ou OFX sem o campo): dedup por CONTAGEM de
+                            # lancamentos identicos (data, descricao, valor). So pula se o banco
+                            # ja tiver tantos identicos quanto os ja vistos aqui, para nao
+                            # descartar repeticoes legitimas nem duplicar ao reimportar.
                             chave = (dt_imp, raw_desc, valor_imp)
                             if chave not in contagem_previa:
                                 # Compara o valor por aproximacao: no Postgres a coluna e REAL
