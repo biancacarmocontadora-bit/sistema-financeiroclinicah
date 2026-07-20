@@ -1580,6 +1580,8 @@ elif page == "Conciliacao Bancaria":
     # ── TAB 1: IMPORTAR EXTRATO ────────────────────────────────────────────────
     with tab_import:
         st.subheader("Importar Extrato Bancario (Excel/CSV/OFX)")
+        if st.session_state.get("imp_msg"):
+            st.success(st.session_state.pop("imp_msg"))
         st.info("Aceita **OFX** (do internet banking) ou planilha **Excel/CSV** com colunas "
                 "**Data**, **Descricao**, **Valor** (positivo=entrada, negativo=saida) ou colunas "
                 "**Credito**/**Debito** separadas. No OFX as colunas ja vem prontas.")
@@ -1624,7 +1626,14 @@ elif page == "Conciliacao Bancaria":
 
                 if st.button("Processar e Importar", type="primary", key="btn_imp"):
                     bank_id_imp = bank_opts.get(banco_imp)
-                    rows_ok, rows_skip = 0, 0
+                    rows_ok, rows_skip, rows_dup = 0, 0, 0
+                    # Quantos lancamentos identicos JA existiam no banco antes desta
+                    # importacao, por (data, descricao, valor), e quantos ja tratamos
+                    # deste arquivo. Assim, lancamentos legitimamente repetidos no
+                    # extrato (ex.: dois PIX iguais no mesmo dia) sao importados, e
+                    # reimportar o mesmo arquivo continua sem duplicar.
+                    contagem_previa = {}
+                    processados = {}
                     for _, row_r in df_raw.iterrows():
                         try:
                             raw_data = str(row_r[col_data]).strip()
@@ -1671,19 +1680,32 @@ elif page == "Conciliacao Bancaria":
                                 rows_skip += 1
                                 continue
 
-                            # Verifica duplicata
-                            existe = q("SELECT id FROM extrato_banco WHERE company_id=? AND bank_id=? AND data=? AND descricao=? AND valor=?",
-                                       (cid, bank_id_imp, dt_imp, raw_desc, valor_imp))
-                            if not existe.empty:
-                                rows_skip += 1
+                            # Duplicata por CONTAGEM: so pula se o banco ja tiver
+                            # tantos lancamentos identicos quanto os ja vistos aqui.
+                            chave = (dt_imp, raw_desc, valor_imp)
+                            if chave not in contagem_previa:
+                                cnt = q("""SELECT COUNT(*) AS c FROM extrato_banco
+                                           WHERE company_id=? AND bank_id=? AND data=? AND descricao=? AND valor=?""",
+                                        (cid, bank_id_imp, dt_imp, raw_desc, valor_imp))
+                                contagem_previa[chave] = int(cnt.iloc[0]["c"]) if not cnt.empty else 0
+                                processados[chave] = 0
+                            if processados[chave] < contagem_previa[chave]:
+                                processados[chave] += 1
+                                rows_dup += 1
                                 continue
+                            processados[chave] += 1
 
                             run("INSERT INTO extrato_banco (company_id, bank_id, data, descricao, valor, tipo) VALUES (?,?,?,?,?,?)",
                                 (cid, bank_id_imp, dt_imp, raw_desc, valor_imp, tipo_imp))
                             rows_ok += 1
                         except Exception as e:
                             rows_skip += 1
-                    st.success(f"Importado: {rows_ok} lancamentos. Ignorados/duplicatas: {rows_skip}.")
+                    msg = f"Importado: {rows_ok} lancamento(s)."
+                    if rows_dup:
+                        msg += f" Ja existiam (nao duplicados): {rows_dup}."
+                    if rows_skip:
+                        msg += f" Linhas ignoradas por data/valor invalido: {rows_skip}."
+                    st.session_state["imp_msg"] = msg
                     st.rerun()
             except Exception as e:
                 st.error(f"Erro ao ler arquivo: {e}")
