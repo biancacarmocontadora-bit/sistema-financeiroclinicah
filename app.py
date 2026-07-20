@@ -536,21 +536,50 @@ def parse_ofx_extrato(arquivo):
         m = _re.search(r"<%s>([^<\r\n]+)" % tag, bloco, _re.IGNORECASE)
         return m.group(1).strip() if m else ""
 
-    linhas = []
-    for bloco in _re.findall(r"<STMTTRN>(.*?)</STMTTRN>", texto, _re.DOTALL | _re.IGNORECASE):
+    def num_ofx(s):
+        """Converte o valor do OFX aceitando os formatos que os bancos usam:
+        1234.56 | 1234,56 | 1.234,56 (BR) | 1,234.56 (US) | com + ou -.
+        Antes, um valor como '1.234,56' virava '1.234.56' e o lancamento era
+        descartado em silencio (sumia do extrato)."""
+        s = str(s or "").strip().replace(" ", "").replace("R$", "")
+        if not s:
+            raise ValueError("vazio")
+        sinal = -1 if s.startswith("-") else 1
+        s = s.lstrip("+-")
+        if "," in s and "." in s:
+            # o separador decimal e o que aparece por ultimo
+            if s.rfind(",") > s.rfind("."):
+                s = s.replace(".", "").replace(",", ".")   # 1.234,56 (BR)
+            else:
+                s = s.replace(",", "")                      # 1,234.56 (US)
+        elif "," in s:
+            s = s.replace(",", ".")                         # 1234,56
+        return sinal * float(s)
+
+    # Aceita blocos com ou sem tag de fechamento (SGML antigo x XML)
+    blocos = _re.split(r"<STMTTRN>", texto, flags=_re.IGNORECASE)[1:]
+    linhas, descartados = [], []
+    for bruto in blocos:
+        bloco = _re.split(r"</STMTTRN>", bruto, flags=_re.IGNORECASE)[0]
         dt = campo(bloco, "DTPOSTED")[:8]
         try:
             data_fmt = datetime.strptime(dt, "%Y%m%d").strftime("%d/%m/%Y")
         except Exception:
+            descartados.append(f"data invalida: '{dt or 'vazia'}'")
             continue
         try:
-            valor = float(campo(bloco, "TRNAMT").replace(",", "."))
+            valor = num_ofx(campo(bloco, "TRNAMT"))
         except Exception:
+            descartados.append(f"valor invalido: '{campo(bloco, 'TRNAMT') or 'vazio'}' em {data_fmt}")
             continue
         desc = campo(bloco, "MEMO") or campo(bloco, "NAME") or "Lancamento"
         linhas.append({"Data": data_fmt, "Descricao": desc,
                        "Valor": f"{valor:.2f}".replace(".", ",")})
-    return pd.DataFrame(linhas, columns=["Data", "Descricao", "Valor"])
+    df_ofx = pd.DataFrame(linhas, columns=["Data", "Descricao", "Valor"])
+    # Diagnostico: quantas transacoes havia no arquivo e o que nao pode ser lido
+    df_ofx.attrs["total_no_arquivo"] = len(blocos)
+    df_ofx.attrs["descartados"] = descartados
+    return df_ofx
 
 def get_or_create_professional_id(company_id, medico_nome):
     """Retorna o id do profissional com esse nome na empresa (casando sem diferenciar
@@ -1597,6 +1626,15 @@ elif page == "Conciliacao Bancaria":
                 nome_arq = arq.name.lower()
                 if nome_arq.endswith(".ofx"):
                     df_raw = parse_ofx_extrato(arq)
+                    total_arq = df_raw.attrs.get("total_no_arquivo", len(df_raw))
+                    descart = df_raw.attrs.get("descartados", [])
+                    st.info(f"O arquivo OFX tem **{total_arq}** lancamento(s) e o sistema conseguiu ler "
+                            f"**{len(df_raw)}**. Confira se bate com o extrato do seu banco.")
+                    if descart:
+                        st.warning(f"{len(descart)} lancamento(s) nao puderam ser lidos:")
+                        for d in descart[:15]:
+                            st.write(f"- {d}")
+                        st.caption("Me envie esta lista para eu ajustar o leitor ao formato do seu banco.")
                     if df_raw.empty:
                         st.warning("Nenhuma transacao encontrada no arquivo OFX. Confira se o arquivo esta correto.")
                 elif nome_arq.endswith(".csv"):
@@ -1684,8 +1722,12 @@ elif page == "Conciliacao Bancaria":
                             # tantos lancamentos identicos quanto os ja vistos aqui.
                             chave = (dt_imp, raw_desc, valor_imp)
                             if chave not in contagem_previa:
+                                # Compara o valor por aproximacao: no Postgres a coluna e REAL
+                                # (precisao simples), entao "valor=150.45" nunca casa com o
+                                # 150.449997 armazenado, e a checagem de duplicata falhava.
                                 cnt = q("""SELECT COUNT(*) AS c FROM extrato_banco
-                                           WHERE company_id=? AND bank_id=? AND data=? AND descricao=? AND valor=?""",
+                                           WHERE company_id=? AND bank_id=? AND data=? AND descricao=?
+                                             AND ABS(valor - ?) < 0.005""",
                                         (cid, bank_id_imp, dt_imp, raw_desc, valor_imp))
                                 contagem_previa[chave] = int(cnt.iloc[0]["c"]) if not cnt.empty else 0
                                 processados[chave] = 0
@@ -1941,6 +1983,50 @@ elif page == "Conciliacao Bancaria":
         bank_id_hist = bank_opts.get(banco_hist)
         df_hist = q("SELECT * FROM extrato_banco WHERE company_id=? AND bank_id=? AND data BETWEEN ? AND ? ORDER BY data DESC",
                     (cid, bank_id_hist, dt_hist_ini.strftime("%Y-%m-%d"), dt_hist_fim.strftime("%Y-%m-%d")))
+
+        if st.session_state.get("dup_msg"):
+            st.success(st.session_state.pop("dup_msg"))
+
+        # Limpeza de duplicatas geradas por importacoes repetidas do mesmo extrato
+        with st.expander("🧹 Remover lancamentos DUPLICADOS do extrato"):
+            st.caption("Procura lancamentos repetidos (mesma data, mesma descricao e mesmo valor) "
+                       "neste banco e periodo. Mantem UM de cada e remove os excedentes. "
+                       "Mantem preferencialmente o que ja estiver conciliado. Revise antes de aplicar.")
+            if df_hist.empty:
+                st.info("Nenhum lancamento neste periodo.")
+            else:
+                dfd = df_hist.copy()
+                dfd["_valor_c"] = dfd["valor"].astype(float).round(2)
+                grupos = dfd.groupby(["data", "descricao", "_valor_c"])
+                ids_remover, resumo = [], []
+                for (gdata, gdesc, gval), g in grupos:
+                    if len(g) <= 1:
+                        continue
+                    # mantem o conciliado (se houver), senao o de menor id
+                    g_ord = g.sort_values(by=["conciliado", "id"], ascending=[False, True])
+                    manter = int(g_ord.iloc[0]["id"])
+                    excedentes = [int(i) for i in g_ord["id"].tolist()[1:]]
+                    ids_remover += excedentes
+                    resumo.append({"data": gdata, "descricao": str(gdesc)[:45], "valor": gval,
+                                   "no sistema": len(g), "manter": 1, "remover": len(excedentes)})
+                if not ids_remover:
+                    st.success("Nenhum lancamento duplicado encontrado neste banco/periodo. 👍")
+                else:
+                    st.warning(f"Encontrados **{len(ids_remover)}** lancamento(s) excedente(s) "
+                               f"em {len(resumo)} grupo(s) repetido(s).")
+                    st.dataframe(pd.DataFrame(resumo), use_container_width=True, hide_index=True)
+                    conf_dup = st.checkbox("Confirmo que quero remover os excedentes", key="conf_dup_rm")
+                    if st.button("Remover duplicados agora", type="primary",
+                                 disabled=not conf_dup, key="btn_dup_rm"):
+                        try:
+                            for rid in ids_remover:
+                                run("DELETE FROM conciliacao_links WHERE company_id=? AND extrato_id=?", (cid, rid))
+                                run("DELETE FROM extrato_banco WHERE id=? AND company_id=?", (rid, cid))
+                            st.cache_data.clear()
+                            st.session_state["dup_msg"] = f"{len(ids_remover)} lancamento(s) duplicado(s) removido(s)."
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Nao foi possivel remover agora. Tente de novo. Detalhe: {e}")
 
         if not df_hist.empty:
             df_show = df_hist.copy()
