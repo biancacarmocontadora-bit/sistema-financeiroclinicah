@@ -1813,6 +1813,54 @@ elif page == "Conciliacao Bancaria":
             except Exception as e:
                 st.error(f"Erro ao ler arquivo: {e}")
 
+        # ── ADICIONAR LANCAMENTO MANUAL AO EXTRATO ──────────────────────────
+        # Para quando faltam uma ou duas linhas no extrato (ex.: nao vieram no
+        # arquivo) e voce NAO quer reimportar tudo e mexer no que ja esta
+        # conciliado. Adiciona so os que voce digitar; eles aparecem como
+        # PENDENTES na aba "Conciliar". Nao afeta os ja conciliados.
+        st.markdown("---")
+        with st.expander("➕ Adicionar lancamento manual ao extrato (sem importar arquivo)"):
+            if not bank_opts:
+                st.info("Cadastre um banco antes de adicionar lancamentos manuais.")
+            else:
+                st.caption("Use para incluir avulsamente os lancamentos que faltaram no extrato. "
+                           "Depois va na aba 'Conciliar' e concilie apenas eles.")
+                with st.form("form_ext_manual", clear_on_submit=True):
+                    fm1, fm2 = st.columns(2)
+                    with fm1:
+                        man_banco = st.selectbox("Banco do Extrato", list(bank_opts.keys()), key="man_banco")
+                        man_data = st.date_input("Data (caiu no banco)", value=date.today(), key="man_data")
+                        man_tipo = st.radio("Tipo", ["Entrada (credito)", "Saida (debito)"],
+                                            horizontal=True, key="man_tipo")
+                    with fm2:
+                        man_desc = st.text_input("Descricao", key="man_desc",
+                                                 placeholder="Ex.: PIX recebido Fulano")
+                        man_valor = st.number_input("Valor (R$)", min_value=0.01, step=0.01,
+                                                    format="%.2f", key="man_valor")
+                    add_ok = st.form_submit_button("Adicionar ao extrato", type="primary")
+                    if add_ok:
+                        desc_lp = (man_desc or "").strip()
+                        if not desc_lp:
+                            st.error("Informe a descricao do lancamento.")
+                        else:
+                            tipo_m = "credito" if man_tipo.startswith("Entrada") else "debito"
+                            bank_id_m = bank_opts.get(man_banco)
+                            try:
+                                run("""INSERT INTO extrato_banco
+                                       (company_id, bank_id, data, descricao, valor, tipo, conciliado)
+                                       VALUES (?,?,?,?,?,?,0)""",
+                                    (cid, bank_id_m, man_data.strftime("%Y-%m-%d"), desc_lp,
+                                     float(man_valor), tipo_m))
+                                st.session_state["imp_msg"] = (
+                                    f"Lancamento manual adicionado ao extrato: {man_data.strftime('%d/%m/%Y')} · "
+                                    f"{desc_lp} · {fmt_brl(float(man_valor))}. "
+                                    "Va na aba 'Conciliar' para concilia-lo.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error("Nao foi possivel salvar agora (o sistema pode estar sendo usado por "
+                                         "outra pessoa neste instante). Aguarde alguns segundos e tente de novo. "
+                                         f"Detalhe: {e}")
+
     # ── TAB 2: CONCILIAR ──────────────────────────────────────────────────────
     with tab_conciliar:
         st.subheader("Conciliar Lancamentos do Extrato")
