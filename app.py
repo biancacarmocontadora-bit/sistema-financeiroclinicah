@@ -9,7 +9,7 @@ import os
 import uuid
 
 st.set_page_config(
-    page_title="Sistema Financeiro - Grupo Empresarial",
+    page_title="Sistema Financeiro",
     page_icon="💼",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1492,8 +1492,6 @@ elif page == "Extrato":
     with col6:
         data_filt = st.selectbox("Filtrar por", ["Competencia", "Caixa"])
 
-    conc_filt = st.selectbox("Conciliacao", ["Todos", "Conciliados", "Pendentes"], key="ext_conc_filt")
-
     campo_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
     ordem_data = "t.date_competencia" if data_filt == "Competencia" else "t.date_caixa"
 
@@ -1532,11 +1530,11 @@ elif page == "Extrato":
     sql += " ORDER BY {} DESC, t.created_at DESC".format(ordem_data)
 
     df = q(sql, tuple(params))
-    if not df.empty and conc_filt != "Todos":
-        alvo_flag = 1 if conc_filt == "Conciliados" else 0
-        df = df[df["ConcFlag"] == alvo_flag]
+    # O Extrato mostra somente lancamentos JA conciliados.
+    if not df.empty:
+        df = df[df["ConcFlag"] == 1]
     if df.empty:
-        st.info("Nenhuma transacao encontrada.")
+        st.info("Nenhuma transacao conciliada encontrada neste periodo.")
     else:
         r_total = df[df["Tipo"] == "receita"]["Valor"].sum()
         d_total = df[df["Tipo"] == "despesa"]["Valor"].sum()
@@ -1555,9 +1553,7 @@ elif page == "Extrato":
         df_show["Tipo"] = df_show["Tipo"].map({"receita": "Receita", "despesa": "Despesa"})
         df_show["Parcela"] = df_show.apply(
             lambda r: "{}/{}".format(int(r["Parc"]), int(r["Total_Parc"])) if pd.notna(r["Parc"]) else "-", axis=1)
-        df_show["Conciliado"] = df_show["ConcFlag"].apply(
-            lambda x: "✅ Conciliado" if int(x or 0) == 1 else "⏳ Pendente")
-        st.dataframe(df_show[["id","Competencia","Caixa","Descricao","Tipo","Valor","Forma","Status","Conciliado","Banco","Categoria","Profissional","Parcela"]],
+        st.dataframe(df_show[["id","Competencia","Caixa","Descricao","Tipo","Valor","Forma","Status","Banco","Categoria","Profissional","Parcela"]],
                      use_container_width=True, hide_index=True)
 
         st.markdown("---")
@@ -2402,54 +2398,27 @@ elif page == "Configuracoes":
     ])
 
     with tab1:
-        st.subheader("Empresas Cadastradas")
-        df_comp = q("SELECT * FROM companies WHERE active=1 ORDER BY name")
-        st.dataframe(df_comp[["id", "name", "cnpj"]], use_container_width=True, hide_index=True)
-
-        st.markdown("---")
-        st.subheader("Editar Empresa")
-        if not df_comp.empty:
-            emp_nomes = df_comp["name"].tolist()
-            emp_sel = st.selectbox("Selecionar empresa para editar", emp_nomes, key="emp_edit_sel")
-            emp_row = df_comp[df_comp["name"] == emp_sel].iloc[0]
+        st.subheader("Dados da Empresa")
+        st.caption("Sistema configurado para uma unica empresa. Aqui voce ajusta o nome e o CNPJ.")
+        emp_atual = q("SELECT * FROM companies WHERE id=?", (cid,))
+        if emp_atual.empty:
+            st.info("Nenhuma empresa cadastrada.")
+        else:
+            emp_row = emp_atual.iloc[0]
             col_emp1, col_emp2 = st.columns(2)
             with col_emp1:
                 new_emp_nome = st.text_input("Nome da Empresa", value=emp_row["name"], key="edit_emp_nome")
             with col_emp2:
                 new_emp_cnpj = st.text_input("CNPJ", value=emp_row["cnpj"] if emp_row["cnpj"] else "", key="edit_emp_cnpj")
-            col_btn1, col_btn2 = st.columns(2)
-            with col_btn1:
-                if st.button("Salvar Alteracoes", key="save_emp_btn"):
-                    if new_emp_nome:
-                        run("UPDATE companies SET name=?, cnpj=? WHERE id=?",
-                            (new_emp_nome, new_emp_cnpj, int(emp_row["id"])))
-                        st.success("Empresa atualizada!")
-                        st.rerun()
-                    else:
-                        st.error("O nome nao pode ficar vazio.")
-            with col_btn2:
-                if st.button("Excluir Empresa", key="del_emp_btn"):
-                    cnt = q("SELECT COUNT(*) as c FROM transactions WHERE company_id=?", (int(emp_row["id"]),))
-                    total_lanc = int(cnt.iloc[0]["c"]) if not cnt.empty else 0
-                    if total_lanc > 0:
-                        st.error("Nao e possivel excluir: empresa possui {} lancamento(s). Apague os lancamentos primeiro em Extrato.".format(total_lanc))
-                    else:
-                        run("UPDATE companies SET active=0 WHERE id=?", (int(emp_row["id"]),))
-                        st.success("Empresa excluida!")
-                        st.rerun()
-        else:
-            st.info("Nenhuma empresa cadastrada.")
-
-        st.markdown("---")
-        st.subheader("Adicionar Empresa")
-        with st.form("form_empresa"):
-            e_nome = st.text_input("Nome da Empresa")
-            e_cnpj = st.text_input("CNPJ")
-            if st.form_submit_button("Adicionar"):
-                if e_nome:
-                    run("INSERT INTO companies (name, cnpj) VALUES (?,?)", (e_nome, e_cnpj))
-                    st.success("Empresa adicionada!")
+            if st.button("Salvar Alteracoes", key="save_emp_btn"):
+                if new_emp_nome:
+                    run("UPDATE companies SET name=?, cnpj=? WHERE id=?",
+                        (new_emp_nome, new_emp_cnpj, int(emp_row["id"])))
+                    st.cache_data.clear()
+                    st.success("Empresa atualizada!")
                     st.rerun()
+                else:
+                    st.error("O nome nao pode ficar vazio.")
 
     with tab2:
         st.subheader("Profissionais")
@@ -2745,12 +2714,11 @@ elif page == "Configuracoes":
     with tab5:
         st.subheader("Sobre o Sistema")
         st.markdown("""
-**Sistema Financeiro - Grupo Empresarial v2.0**
+**Sistema Financeiro v2.0**
 
 Desenvolvido com Python + Streamlit + SQLite
 
 Funcionalidades:
-- Multiplas empresas
 - Receitas e despesas com parcelamento
 - Cartao de credito com calculo automatico de taxas
 - Controle por banco e profissional
